@@ -98,6 +98,7 @@ npm i ioredis typeorm zod reflect-metadata
 
 - [Express](./docs/express.md) — service file, routes, handler, end-to-end snippet.
 - [NestJS](./docs/nestjs.md) — module, provider, controller, handler, end-to-end snippet.
+- [Database (without TypeORM)](./docs/database.md) — canonical MariaDB schema and a hand-rolled `TaskStore` skeleton.
 
 ## POC
 
