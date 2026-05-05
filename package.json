@@ -1,6 +1,6 @@
 {
   "name": "@naskot/node-dispatched-tasks",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Persisted, weight-aware async task dispatcher for Node microservices (MariaDB + Redis hybrid, agnostic Express/NestJS).",
   "license": "MIT",
   "type": "module",
