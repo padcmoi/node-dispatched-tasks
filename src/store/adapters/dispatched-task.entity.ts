@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn, UpdateDateColumn } from "typeorm";
+import { TASK_SOURCES } from "../../core/types.js";
 import type { TaskSource, TaskStatus } from "../../core/types.js";
 
 @Entity("dispatched_task")
@@ -54,7 +55,7 @@ export class DispatchedTask {
   @Column({ type: "text", name: "last_error", nullable: true })
   lastError!: string | null;
 
-  @Column({ type: "varchar", length: 16 })
+  @Column({ type: "enum", enum: TASK_SOURCES })
   source!: TaskSource;
 
   @Column({ type: "json", name: "source_meta", nullable: true })
