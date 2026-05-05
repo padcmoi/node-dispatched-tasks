@@ -1,0 +1,95 @@
+name: dispatched-tasks-poc
+
+services:
+  mariadb:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: dispatched_tasks_poc
+      MARIADB_USER: app
+      MARIADB_PASSWORD: app
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    environment:
+      PMA_HOST: mariadb
+      PMA_USER: root
+      PMA_PASSWORD: root
+      UPLOAD_LIMIT: 64M
+    ports:
+      - "8080:80"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6079:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nestjs-tasks-owner:
+    build:
+      context: ..
+      dockerfile: poc/nestjs-tasks-owner/Dockerfile
+    environment:
+      PORT: "3000"
+      DT_REDIS_HOST: redis
+      DT_REDIS_PORT: "6379"
+      DT_REDIS_NAMESPACE: dispatched-tasks-poc
+      DT_DB_HOST: mariadb
+      DT_DB_PORT: "3306"
+      DT_DB_NAME: dispatched_tasks_poc
+      DT_DB_USER: app
+      DT_DB_PASSWORD: app
+    ports:
+      - "3000:3000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  express-emitter:
+    build:
+      context: ..
+      dockerfile: poc/express-emitter/Dockerfile
+    environment:
+      PORT: "3000"
+      OWNER_URL: http://nestjs-tasks-owner:3000
+    ports:
+      - "3001:3000"
+    depends_on:
+      nestjs-tasks-owner:
+        condition: service_started
+
+  nestjs-emitter:
+    build:
+      context: ..
+      dockerfile: poc/nestjs-emitter/Dockerfile
+    environment:
+      PORT: "3000"
+      OWNER_URL: http://nestjs-tasks-owner:3000
+    ports:
+      - "3002:3000"
+    depends_on:
+      nestjs-tasks-owner:
+        condition: service_started
+
+volumes:
+  mariadb-data:
+  redis-data:
