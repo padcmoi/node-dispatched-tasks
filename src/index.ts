@@ -44,7 +44,12 @@ export { TASK_SOURCES, TASK_STATUSES } from "./core/types.js";
 export type { TaskStore } from "./store/task-store.interface.js";
 export { TypeOrmTaskStore } from "./store/adapters/typeorm-task-store.js";
 export type { TypeOrmTaskStoreOptions } from "./store/adapters/typeorm-task-store.js";
-export { DispatchedTask } from "./store/adapters/dispatched-task.entity.js";
+export {
+  DispatchedTask,
+  configureDispatchedTask,
+  getConfiguredDispatchedTaskTableName,
+} from "./store/adapters/dispatched-task.entity.js";
+export type { DispatchedTaskConfig } from "./store/adapters/dispatched-task.entity.js";
 
 // Priority (interface + adapters)
 export type { PriorityIndex, ReadyClaim } from "./priority/priority-index.interface.js";

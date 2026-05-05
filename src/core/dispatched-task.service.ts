@@ -3,6 +3,7 @@ import { TaskRegistry } from "./task-registry.js";
 import { ulid } from "./ulid.js";
 import { TaskNotFoundError } from "./errors.js";
 import { validatePayload } from "../validation/zod-validate.js";
+import { configureDispatchedTask } from "../store/adapters/dispatched-task.entity.js";
 import type { PriorityIndex } from "../priority/priority-index.interface.js";
 import type { TaskStore } from "../store/task-store.interface.js";
 import type { Logger, NewTaskRecord, TaskDefinition, TaskListFilters, TaskSource } from "./types.js";
@@ -16,9 +17,26 @@ export interface SchedulerConfig {
 }
 
 export interface DispatchedTaskServiceOptions {
-  store: TaskStore;
+  /**
+   * Eager TaskStore. Either `store` or `taskStoreFactory` must be provided.
+   */
+  store?: TaskStore;
+  /**
+   * Lazy TaskStore factory. Resolved on the first call to `start()`, AFTER any TypeORM DataSource
+   * has been initialized. Use this when you want the lib's service constructor to run before
+   * `DataSource.initialize()` so that `tableName` (below) takes effect.
+   */
+  taskStoreFactory?: () => TaskStore;
   priority: PriorityIndex;
   workerId: string;
+  /**
+   * Optional override for the SQL table name of `DispatchedTask` (and its index names).
+   * Applied via `configureDispatchedTask` inside the service constructor — meaning the constructor
+   * must run BEFORE `DataSource.initialize()` for it to take effect.
+   *
+   * If omitted or empty, the default `dispatched_task` is used.
+   */
+  tableName?: string;
   scheduler?: SchedulerConfig;
   logger?: Logger;
   idempotencyTtlSeconds?: number;
@@ -41,34 +59,41 @@ export interface EnqueueInput {
 const DEFAULT_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60;
 
 export class DispatchedTaskService {
-  private readonly store: TaskStore;
+  private store: TaskStore | null;
+  private readonly storeFactory: (() => TaskStore) | null;
   private readonly priority: PriorityIndex;
   private readonly registry = new TaskRegistry();
-  private readonly scheduler: Scheduler | null;
+  private readonly schedulerOptions: SchedulerConfig | undefined;
+  private readonly schedulerWorkerId: string;
+  private scheduler: Scheduler | null = null;
   private readonly logger: Logger;
   private readonly idempotencyTtlSeconds: number;
   private started = false;
 
   constructor(options: DispatchedTaskServiceOptions) {
-    this.store = options.store;
+    if (options.tableName !== undefined) {
+      configureDispatchedTask({ tableName: options.tableName });
+    }
+    if (options.store && options.taskStoreFactory) {
+      throw new Error("DispatchedTaskService: pass either `store` or `taskStoreFactory`, not both.");
+    }
+    if (!options.store && !options.taskStoreFactory) {
+      throw new Error("DispatchedTaskService: either `store` or `taskStoreFactory` must be provided.");
+    }
+    this.store = options.store ?? null;
+    this.storeFactory = options.taskStoreFactory ?? null;
     this.priority = options.priority;
     this.logger = options.logger ?? createNoopLogger();
     this.idempotencyTtlSeconds = options.idempotencyTtlSeconds ?? DEFAULT_IDEMPOTENCY_TTL_SECONDS;
-    if (options.scheduler && options.scheduler.enabled) {
-      this.scheduler = new Scheduler({
-        store: options.store,
-        priority: options.priority,
-        registry: this.registry,
-        workerId: options.workerId,
-        pollIntervalMs: options.scheduler.pollIntervalMs,
-        promoteIntervalMs: options.scheduler.promoteIntervalMs,
-        maxConcurrentTasks: options.scheduler.maxConcurrentTasks,
-        maxConcurrentWeight: options.scheduler.maxConcurrentWeight,
-        logger: this.logger,
-      });
-    } else {
-      this.scheduler = null;
+    this.schedulerOptions = options.scheduler;
+    this.schedulerWorkerId = options.workerId;
+  }
+
+  private requireStore() {
+    if (!this.store) {
+      throw new Error("DispatchedTaskService: store not yet resolved. Call start() first.");
     }
+    return this.store;
   }
 
   register<TPayload, TResult>(definition: TaskDefinition<TPayload, TResult>) {
@@ -84,6 +109,7 @@ export class DispatchedTaskService {
   }
 
   async enqueue(input: EnqueueInput) {
+    const store = this.requireStore();
     const handler = this.registry.tryGet(input.code);
     const weight = input.weight ?? handler?.weight ?? 1;
     const maxAttempts = input.maxAttempts ?? handler?.maxAttempts ?? 3;
@@ -91,7 +117,7 @@ export class DispatchedTaskService {
       validatePayload(handler.inputSchema, input.payload);
     }
     if (input.idempotencyKey) {
-      const existing = await this.store.getByIdempotencyKey(input.idempotencyKey);
+      const existing = await store.getByIdempotencyKey(input.idempotencyKey);
       if (existing) return existing;
     }
 
@@ -111,14 +137,14 @@ export class DispatchedTaskService {
       priority: input.priority ?? null,
     };
 
-    const record = await this.store.insert(newRecord);
+    const record = await store.insert(newRecord);
 
     if (input.idempotencyKey) {
       const owner = await this.priority.acquireIdempotency(input.idempotencyKey, record.publicId, this.idempotencyTtlSeconds);
       if (owner !== record.publicId) {
-        const existing = await this.store.getByIdempotencyKey(input.idempotencyKey);
+        const existing = await store.getByIdempotencyKey(input.idempotencyKey);
         if (existing && existing.publicId !== record.publicId) {
-          await this.store.cancel(record.publicId);
+          await store.cancel(record.publicId);
           return existing;
         }
       }
@@ -141,17 +167,18 @@ export class DispatchedTaskService {
   }
 
   async get(publicId: string) {
-    return this.store.getByPublicId(publicId);
+    return this.requireStore().getByPublicId(publicId);
   }
 
   async list(filters: TaskListFilters = {}) {
-    return this.store.list(filters);
+    return this.requireStore().list(filters);
   }
 
   async retry(publicId: string) {
-    const record = await this.store.getByPublicId(publicId);
+    const store = this.requireStore();
+    const record = await store.getByPublicId(publicId);
     if (!record) throw new TaskNotFoundError(publicId);
-    const reset = await this.store.resetForRetry(publicId, null);
+    const reset = await store.resetForRetry(publicId, null);
     if (!reset) return null;
     const score = computeReadyScore(reset.priority, Date.now());
     await this.priority.enqueueReady(publicId, score);
@@ -160,7 +187,7 @@ export class DispatchedTaskService {
   }
 
   async cancel(publicId: string) {
-    const cancelled = await this.store.cancel(publicId);
+    const cancelled = await this.requireStore().cancel(publicId);
     if (cancelled) {
       await this.priority.removeReady(publicId);
       this.logger.info("[dispatched-tasks] cancelled", { publicId });
@@ -171,6 +198,22 @@ export class DispatchedTaskService {
   async start() {
     if (this.started) return;
     this.started = true;
+    if (!this.store && this.storeFactory) {
+      this.store = this.storeFactory();
+    }
+    if (this.schedulerOptions && this.schedulerOptions.enabled) {
+      this.scheduler = new Scheduler({
+        store: this.requireStore(),
+        priority: this.priority,
+        registry: this.registry,
+        workerId: this.schedulerWorkerId,
+        pollIntervalMs: this.schedulerOptions.pollIntervalMs,
+        promoteIntervalMs: this.schedulerOptions.promoteIntervalMs,
+        maxConcurrentTasks: this.schedulerOptions.maxConcurrentTasks,
+        maxConcurrentWeight: this.schedulerOptions.maxConcurrentWeight,
+        logger: this.logger,
+      });
+    }
     await this.recoverPendingOrRunning();
     if (this.scheduler) {
       this.scheduler.start();
@@ -190,13 +233,14 @@ export class DispatchedTaskService {
   }
 
   private async recoverPendingOrRunning() {
-    const tasks = await this.store.pendingOrRunning();
+    const store = this.requireStore();
+    const tasks = await store.pendingOrRunning();
     if (tasks.length === 0) return;
     let readyCount = 0;
     let delayedCount = 0;
     for (const t of tasks) {
       if (t.status === "claimed" || t.status === "running") {
-        await this.store.resetForRetry(t.publicId, null);
+        await store.resetForRetry(t.publicId, null);
       }
       if (t.scheduledAt && t.scheduledAt.getTime() > Date.now()) {
         await this.priority.enqueueDelayed(t.publicId, t.scheduledAt.getTime());

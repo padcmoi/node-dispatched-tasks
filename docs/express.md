@@ -214,7 +214,51 @@ void main();
 
 ---
 
-## 5) Production notes
+## 5) Custom table name (optional)
+
+Default SQL table is `dispatched_task`. To override it (and rename its indexes accordingly), pass `tableName` to the `DispatchedTaskService` constructor and use `taskStoreFactory` so the store is built lazily AFTER the DataSource is initialized:
+
+```ts
+import { DispatchedTask, DispatchedTaskService, RedisPriorityIndex, TypeOrmTaskStore } from "@naskot/node-dispatched-tasks";
+import { DataSource } from "typeorm";
+import IORedis from "ioredis";
+
+// Read env in the service layer (NOT inside the library).
+const tableName = process.env.DT_TABLE_NAME;
+
+// Build but do NOT initialize the DataSource yet.
+export const dataSource = new DataSource({
+  type: "mariadb",
+  entities: [DispatchedTask],
+  // ... other options
+});
+const redis = new IORedis(/* ... */);
+
+// Construct the service first — it applies `tableName` to the entity metadata immediately.
+export const dispatchedTaskService = new DispatchedTaskService({
+  tableName,
+  taskStoreFactory: () => new TypeOrmTaskStore({ repository: dataSource.getRepository(DispatchedTask) }),
+  priority: new RedisPriorityIndex({ redis, namespace: "dispatched-tasks" }),
+  workerId: process.env.WORKER_ID ?? "express-worker",
+  scheduler: { enabled: true },
+});
+
+// Initialize the DataSource AFTER service construction.
+await dataSource.initialize();
+await dispatchedTaskService.start();
+```
+
+Alternative — if you prefer to apply the override yourself before any service is built, the standalone `configureDispatchedTask({ tableName })` is also exported and is what the service uses internally.
+
+Notes:
+
+- Empty or unset `tableName` keeps the default `dispatched_task`.
+- The override is idempotent: subsequent attempts to change the table name are no-ops.
+- The Redis namespace (`new RedisPriorityIndex({ namespace: ... })`) is a **separate** concern; it has nothing to do with the SQL table name and should not be set to the same value.
+
+---
+
+## 6) Production notes
 
 - **Required envs (resolved in the service layer)**: `DT_REDIS_HOST`, `DT_REDIS_PORT`, `DT_REDIS_NAMESPACE`, `DT_DB_HOST`, `DT_DB_PORT`, `DT_DB_NAME`, `DT_DB_USER`, `DT_DB_PASSWORD`, optionally `WORKER_ID`.
 - **Migrations**: replace `synchronize: true` with a migration generated against the `DispatchedTask` entity.
