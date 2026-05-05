@@ -1,5 +1,19 @@
 # CHANGELOG
 
-## [0.0.0] - 2026-04-23
+## [0.1.0] - 2026-05-05
 
-- First commit
+- Public service `DispatchedTaskService` (register / enqueue / get / list / retry / cancel / start / stop).
+- Handler factory `defineTask`.
+- TypeORM store adapter and `DispatchedTask` entity.
+- Redis priority index adapter with configurable namespace.
+- Token-bucket scheduler with atomic claim, timeout, retry/backoff.
+- Boot recovery from MariaDB.
+- Idempotent enqueue via `idempotencyKey`.
+- Scheduled tasks via `scheduledAt`.
+- ULID `public_id` generator.
+- Custom error types.
+- Pluggable `Logger` interface.
+- `source` column as SQL `ENUM`.
+- POC stack (MariaDB, Redis, phpMyAdmin, NestJS holder, Express emitter, NestJS emitter).
+- README, Express guide, NestJS guide.
+- Unit tests with in-memory fixtures.

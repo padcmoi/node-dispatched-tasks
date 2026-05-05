@@ -1,0 +1,19 @@
+{
+  "name": "poc-express-emitter",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@naskot/node-dispatched-tasks": "file:../..",
+    "express": "^4.21.2",
+    "tsx": "^4.19.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.7.4",
+    "typescript": "^5.6.3"
+  }
+}
