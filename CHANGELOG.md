@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [Unreleased] - yyyy-mm-dd
+## [0.1.0] - 2026-05-05
 
 - Public service `DispatchedTaskService` (register / enqueue / get / list / retry / cancel / start / stop).
 - Handler factory `defineTask`.
