@@ -16,10 +16,13 @@ import echoFromNestjs from "../jobs/dispatched-tasks/echo-from-nestjs.task";
 export const DT_DATA_SOURCE = "DT_DATA_SOURCE";
 export const DT_REDIS = "DT_REDIS";
 
+// IMPORTANT: this provider returns the DataSource UNINITIALIZED so that the LibService
+// constructor (which applies `tableName` via `configureDispatchedTask`) runs BEFORE
+// `dataSource.initialize()` is called in `onApplicationBootstrap`.
 export const dataSourceProvider = {
   provide: DT_DATA_SOURCE,
-  useFactory: async () => {
-    const ds = new DataSource({
+  useFactory: () =>
+    new DataSource({
       type: "mariadb",
       host: process.env.DT_DB_HOST ?? "127.0.0.1",
       port: Number(process.env.DT_DB_PORT ?? 3306),
@@ -29,10 +32,7 @@ export const dataSourceProvider = {
       entities: [DispatchedTask],
       synchronize: true,
       logging: false,
-    });
-    await ds.initialize();
-    return ds;
-  },
+    }),
 };
 
 export const redisProvider = {
@@ -54,9 +54,9 @@ export class DispatchedTaskService implements OnApplicationBootstrap, OnApplicat
     @Inject(DT_DATA_SOURCE) private readonly dataSource: DataSource,
     @Inject(DT_REDIS) private readonly redis: Redis
   ) {
-    const repository = dataSource.getRepository(DispatchedTask);
     this.lib = new LibService({
-      store: new TypeOrmTaskStore({ repository }),
+      tableName: process.env.DT_TABLE_NAME,
+      taskStoreFactory: () => new TypeOrmTaskStore({ repository: this.dataSource.getRepository(DispatchedTask) }),
       priority: new RedisPriorityIndex({
         redis,
         namespace: process.env.DT_REDIS_NAMESPACE ?? "dispatched-tasks",
@@ -80,6 +80,7 @@ export class DispatchedTaskService implements OnApplicationBootstrap, OnApplicat
   }
 
   async onApplicationBootstrap() {
+    await this.dataSource.initialize();
     await this.lib.start();
     this.log.log(`registered task codes: ${this.lib.listRegisteredCodes().join(", ")}`);
   }
@@ -87,7 +88,9 @@ export class DispatchedTaskService implements OnApplicationBootstrap, OnApplicat
   async onApplicationShutdown() {
     await this.lib.stop();
     await this.redis.quit();
-    await this.dataSource.destroy();
+    if (this.dataSource.isInitialized) {
+      await this.dataSource.destroy();
+    }
   }
 
   enqueue(input: EnqueueInput) {

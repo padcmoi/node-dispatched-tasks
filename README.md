@@ -78,6 +78,10 @@ You register handler functions with a stable `code`. You enqueue tasks by `code`
 
 This keeps the library deterministic and testable, and lets each consumer (Express, NestJS, Lambda, etc.) handle env injection in its own idiomatic way.
 
+### Custom table name (optional)
+
+The default SQL table name is `dispatched_task`. Pass `tableName` to the `DispatchedTaskService` constructor to override it (table + index names) — the service applies it before any TypeORM `DataSource` is initialized. See the [Express](./docs/express.md) and [NestJS](./docs/nestjs.md) integration guides for runnable examples.
+
 ## Install
 
 ```bash
@@ -94,6 +98,7 @@ npm i ioredis typeorm zod reflect-metadata
 
 - [Express](./docs/express.md) — service file, routes, handler, end-to-end snippet.
 - [NestJS](./docs/nestjs.md) — module, provider, controller, handler, end-to-end snippet.
+- [Database (without TypeORM)](./docs/database.md) — canonical MariaDB schema and a hand-rolled `TaskStore` skeleton.
 
 ## POC
 
@@ -110,7 +115,7 @@ It boots three apps (1 NestJS task holder + 1 Express emitter + 1 NestJS emitter
 ```ts
 // Service
 class DispatchedTaskService {
-  constructor(options: DispatchedTaskServiceOptions);
+  constructor(options: DispatchedTaskServiceOptions); // accepts `tableName?` and `taskStoreFactory?` (lazy alternative to `store`)
   register(definition: TaskDefinition): void;
   enqueue(input: EnqueueInput): Promise<TaskRecord>;
   get(publicId: string): Promise<TaskRecord | null>;
@@ -129,7 +134,8 @@ class TypeOrmTaskStore implements TaskStore;
 class RedisPriorityIndex implements PriorityIndex;
 
 // Entity (TypeORM, register in your DataSource)
-class DispatchedTask;
+class DispatchedTask;                                   // table name "dispatched_task" by default
+function configureDispatchedTask(opts: { tableName?: string }); // optional override of table + index names
 ```
 
 ## Development

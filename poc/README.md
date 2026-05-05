@@ -41,7 +41,7 @@ docker compose down -v
 
 | URL / Port              | What                                                                                                                       |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `http://localhost:8080` | phpMyAdmin (root / root) — browse the `dispatched_task` table                                                              |
+| `http://localhost:8080` | phpMyAdmin (root / root) — browse the `DispatchedTask` table (custom name set via `DT_TABLE_NAME` env)                     |
 | `localhost:6079`        | Redis (host port 6079 → container 6379) — point RedisInsight or `redis-cli -p 6079` here, namespace `dispatched-tasks-poc` |
 | `http://localhost:3000` | `nestjs-tasks-owner` — `GET /tasks` to list, `GET /tasks/:publicId`, etc.                                                  |
 | `http://localhost:3001` | `express-emitter`                                                                                                          |
@@ -76,6 +76,17 @@ curl http://localhost:3000/tasks?limit=10
 # Inspect one:
 curl http://localhost:3000/tasks/<publicId>
 ```
+
+## Custom table name
+
+The lib lets you override the SQL table name. This POC demonstrates that:
+
+- `docker-compose.yml` sets `DT_TABLE_NAME` on `nestjs-tasks-owner` (any SQL-valid identifier, e.g. `DispatchedTask`, `dispatched_task_v2`, `dispatched-task123`).
+- `nestjs-tasks-owner/src/dispatched-tasks/dispatched-task.service.ts` passes `tableName: process.env.DT_TABLE_NAME` to the `DispatchedTaskService` options, alongside a `taskStoreFactory` so the store is built lazily after the DataSource is initialized.
+- The DataSource provider returns an **uninitialized** DataSource; `dataSource.initialize()` is called in `onApplicationBootstrap` AFTER the service constructor has applied the table-name override.
+- Result: in phpMyAdmin you see whatever table name you set, instead of the default `dispatched_task`.
+
+Unset the variable to fall back to the default `dispatched_task`.
 
 ## Files of interest
 

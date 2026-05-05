@@ -56,6 +56,10 @@ services:
       DT_DB_NAME: dispatched_tasks_poc
       DT_DB_USER: app
       DT_DB_PASSWORD: app
+      # Demonstrates the optional table-name override.
+      # Reads from .env (or shell) — falls back to "dispatched-task123" so the demo always shows a non-default name.
+      # Unset to fall back to the lib default "dispatched_task".
+      DT_TABLE_NAME: "${DT_TABLE_NAME:-dispatched-task123}"
     ports:
       - "3000:3000"
     depends_on:

@@ -1,4 +1,4 @@
-[← Back to README](../README.md) · [Express guide →](./express.md)
+[← Back to README](../README.md) · [Express guide →](./express.md) · [Database (no TypeORM)](./database.md)
 
 # NestJS integration
 
@@ -262,7 +262,77 @@ void bootstrap();
 
 ---
 
-## 6) Production notes
+## 6) Custom table name (optional)
+
+Default SQL table is `dispatched_task`. With NestJS, the cleanest pattern is to pass `tableName` to the `DispatchedTaskService` options and use `taskStoreFactory` so the store is built lazily AFTER the DataSource is initialized in `onApplicationBootstrap`. The provider must return an **uninitialized** DataSource so the service constructor runs first:
+
+```ts
+// dispatched-task.service.ts
+import IORedis, { type Redis } from "ioredis";
+import { Inject, Injectable, OnApplicationBootstrap, OnApplicationShutdown } from "@nestjs/common";
+import { DataSource } from "typeorm";
+import {
+  DispatchedTask,
+  DispatchedTaskService as LibService,
+  RedisPriorityIndex,
+  TypeOrmTaskStore,
+} from "@naskot/node-dispatched-tasks";
+
+export const DT_DATA_SOURCE = "DT_DATA_SOURCE";
+export const DT_REDIS = "DT_REDIS";
+
+// Provider returns the DataSource UNINITIALIZED so the service constructor
+// (which applies `tableName` via `configureDispatchedTask`) runs first.
+export const dataSourceProvider = {
+  provide: DT_DATA_SOURCE,
+  useFactory: () =>
+    new DataSource({
+      type: "mariadb",
+      entities: [DispatchedTask],
+      // ... other options
+    }),
+};
+
+@Injectable()
+export class DispatchedTaskService implements OnApplicationBootstrap, OnApplicationShutdown {
+  private readonly lib: LibService;
+
+  constructor(
+    @Inject(DT_DATA_SOURCE) private readonly dataSource: DataSource,
+    @Inject(DT_REDIS) private readonly redis: Redis
+  ) {
+    this.lib = new LibService({
+      tableName: process.env.DT_TABLE_NAME,
+      taskStoreFactory: () => new TypeOrmTaskStore({ repository: this.dataSource.getRepository(DispatchedTask) }),
+      priority: new RedisPriorityIndex({ redis, namespace: "dispatched-tasks" }),
+      workerId: process.env.WORKER_ID ?? "nest-worker",
+      scheduler: { enabled: true },
+    });
+  }
+
+  async onApplicationBootstrap() {
+    await this.dataSource.initialize();
+    await this.lib.start();
+  }
+
+  async onApplicationShutdown() {
+    await this.lib.stop();
+    if (this.dataSource.isInitialized) await this.dataSource.destroy();
+  }
+}
+```
+
+Alternative — if you prefer to apply the override yourself before any service is built, the standalone `configureDispatchedTask({ tableName })` is also exported and is what the service uses internally.
+
+Notes:
+
+- Empty or unset `tableName` keeps the default `dispatched_task`.
+- The override is idempotent: subsequent attempts to change the table name are no-ops.
+- The Redis namespace (`new RedisPriorityIndex({ namespace: ... })`) is a **separate** concern; it has nothing to do with the SQL table name and should not be set to the same value.
+
+---
+
+## 7) Production notes
 
 - **Required envs (resolved in the provider layer)**: `DT_REDIS_HOST`, `DT_REDIS_PORT`, `DT_REDIS_NAMESPACE`, `DT_DB_HOST`, `DT_DB_PORT`, `DT_DB_NAME`, `DT_DB_USER`, `DT_DB_PASSWORD`, optionally `WORKER_ID`.
 - **`reflect-metadata`**: import once at the top of `main.ts` for both NestJS and TypeORM decorators.
