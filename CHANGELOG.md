@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [Unreleased] - yyyy-mm-dd
+## [0.1.1] - 2026-05-05
 
 - `tableName` and `taskStoreFactory` options on `DispatchedTaskService`.
 - `configureDispatchedTask` exported.
