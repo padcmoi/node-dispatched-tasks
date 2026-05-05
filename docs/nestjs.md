@@ -1,77 +1,59 @@
-[← Back to README](../README.md) · [Express guide →](./express.md) · [Database (no TypeORM)](./database.md)
+[← Back to README](../README.md) · [Express guide](./express.md)
 
 # NestJS integration
 
-This guide shows how to wire `@naskot/node-dispatched-tasks` into a NestJS app.
+This guide shows how to wire `@naskot/node-dispatched-tasks` v2 (pure-Redis) into a NestJS app.
 
 > Configuration rule: do **not** read `process.env` inside the library code.
 > Read env values in the provider/service layer below, then pass plain config to the library.
+
+> Single-master rule: the scheduler must run on **only one process** (typically PM2 instance `0`). Your bootstrap initializer is responsible for that gate.
 
 ---
 
 ## 1) Provider / service file
 
-`src/dispatched-tasks/dispatched-task.service.ts`
+`src/delayed-tasks/delayed-tasks.service.ts`
 
 ```ts
-import "reflect-metadata";
 import IORedis, { type Redis } from "ioredis";
-import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
-import { DataSource, Repository } from "typeorm";
+import { Inject, Injectable, OnApplicationShutdown } from "@nestjs/common";
 import {
-  DispatchedTask,
-  DispatchedTaskService as LibDispatchedTaskService,
-  RedisPriorityIndex,
-  TypeOrmTaskStore,
+  DelayedTaskService as LibService,
   type EnqueueInput,
-  type TaskListFilters,
+  type ReplayOptions,
 } from "@naskot/node-dispatched-tasks";
 
-export const DT_DATA_SOURCE = "DT_DATA_SOURCE";
 export const DT_REDIS = "DT_REDIS";
 
 @Injectable()
-export class DispatchedTaskService implements OnModuleInit, OnModuleDestroy {
-  private readonly lib: LibDispatchedTaskService;
+export class DelayedTaskService implements OnApplicationShutdown {
+  private readonly lib: LibService;
 
-  constructor(
-    @Inject(DT_DATA_SOURCE) private readonly dataSource: DataSource,
-    @Inject(DT_REDIS) private readonly redis: Redis
-  ) {
-    const repository: Repository<DispatchedTask> = dataSource.getRepository(DispatchedTask);
-    this.lib = new LibDispatchedTaskService({
-      store: new TypeOrmTaskStore({ repository }),
-      priority: new RedisPriorityIndex({
-        redis,
-        namespace: process.env.DT_REDIS_NAMESPACE ?? "dispatched-tasks",
-      }),
-      workerId: process.env.WORKER_ID ?? `${process.env.HOSTNAME ?? "worker"}-${String(process.pid)}`,
-      scheduler: {
-        enabled: true,
-        pollIntervalMs: 1000,
-        promoteIntervalMs: 1000,
-        maxConcurrentTasks: 10,
-        maxConcurrentWeight: 100,
-      },
+  constructor(@Inject(DT_REDIS) private readonly redis: Redis) {
+    this.lib = new LibService({
+      redis,
+      namespace: process.env.DT_NAMESPACE ?? "delayed-tasks",
+      maxTasks: Number(process.env.DT_MAX_TASKS ?? 5),
+      pollIntervalMs: Number(process.env.DT_POLL_INTERVAL_MS ?? 1000),
       logger: console,
     });
   }
 
-  async onModuleInit() {
-    await this.lib.start();
-  }
-
-  async onModuleDestroy() {
+  async onApplicationShutdown() {
     await this.lib.stop();
   }
 
-  // Re-exposes the library API so the rest of the app uses Nest's DI system.
+  // Re-expose the library API.
   register: typeof this.lib.register = (def) => this.lib.register(def);
+  has = (name: string) => this.lib.has(name);
   enqueue = (input: EnqueueInput) => this.lib.enqueue(input);
-  get = (publicId: string) => this.lib.get(publicId);
-  list = (filters?: TaskListFilters) => this.lib.list(filters);
-  retry = (publicId: string) => this.lib.retry(publicId);
-  cancel = (publicId: string) => this.lib.cancel(publicId);
+  cancel = (id: number) => this.lib.cancel(id);
+  replay = (id: number, options?: ReplayOptions) => this.lib.replay(id, options);
+  get = (id: number) => this.lib.get(id);
+  list = this.lib.list;
+  start = () => this.lib.start();
+  stop = () => this.lib.stop();
 }
 ```
 
@@ -79,121 +61,100 @@ export class DispatchedTaskService implements OnModuleInit, OnModuleDestroy {
 
 ## 2) Module
 
-`src/dispatched-tasks/dispatched-tasks.module.ts`
+`src/delayed-tasks/delayed-tasks.module.ts`
 
 ```ts
 import IORedis from "ioredis";
-import { Module, type OnModuleDestroy } from "@nestjs/common";
-import { DataSource } from "typeorm";
-import { DispatchedTask } from "@naskot/node-dispatched-tasks";
-import { DispatchedTaskController } from "./dispatched-tasks.controller.js";
-import { DispatchedTaskService, DT_DATA_SOURCE, DT_REDIS } from "./dispatched-task.service.js";
+import { Module } from "@nestjs/common";
+import { DelayedTaskController } from "./delayed-tasks.controller.js";
+import { DelayedTaskService, DT_REDIS } from "./delayed-tasks.service.js";
 
 @Module({
-  controllers: [DispatchedTaskController],
+  controllers: [DelayedTaskController],
   providers: [
-    {
-      provide: DT_DATA_SOURCE,
-      useFactory: async () => {
-        const ds = new DataSource({
-          type: "mariadb",
-          host: process.env.DT_DB_HOST ?? "127.0.0.1",
-          port: Number(process.env.DT_DB_PORT ?? 3306),
-          database: process.env.DT_DB_NAME ?? "app",
-          username: process.env.DT_DB_USER ?? "root",
-          password: process.env.DT_DB_PASSWORD ?? "",
-          entities: [DispatchedTask],
-          synchronize: true, // dev-only
-          logging: false,
-        });
-        await ds.initialize();
-        return ds;
-      },
-    },
     {
       provide: DT_REDIS,
       useFactory: () =>
         new IORedis({
           host: process.env.DT_REDIS_HOST ?? "127.0.0.1",
           port: Number(process.env.DT_REDIS_PORT ?? 6379),
+          password: process.env.DT_REDIS_PASSWORD ?? undefined,
           maxRetriesPerRequest: null,
         }),
     },
-    DispatchedTaskService,
+    DelayedTaskService,
   ],
-  exports: [DispatchedTaskService],
+  exports: [DelayedTaskService],
 })
-export class DispatchedTasksModule implements OnModuleDestroy {
-  async onModuleDestroy() {
-    // No-op here: each provider handles its own teardown.
-    // (DataSource.destroy and Redis.quit can be called from a dedicated lifecycle if you prefer.)
-  }
-}
+export class DelayedTasksModule {}
 ```
 
 ---
 
 ## 3) Controller (admin endpoints + receive-task endpoint)
 
-`src/dispatched-tasks/dispatched-tasks.controller.ts`
+`src/delayed-tasks/delayed-tasks.controller.ts`
 
 ```ts
 import { Body, Controller, Get, HttpCode, NotFoundException, Param, Post, Query } from "@nestjs/common";
-import { DispatchedTaskService } from "./dispatched-task.service.js";
+import { DelayedTaskService } from "./delayed-tasks.service.js";
 
 @Controller("tasks")
-export class DispatchedTaskController {
-  constructor(private readonly tasks: DispatchedTaskService) {}
+export class DelayedTaskController {
+  constructor(private readonly tasks: DelayedTaskService) {}
 
   @Post()
   @HttpCode(202)
   async enqueue(
+    @Query("name") name: string,
     @Body()
     body: {
-      code: string;
-      payload?: unknown;
-      idempotencyKey?: string;
-      scheduledAt?: string | null;
+      data?: unknown;
+      scheduledAt?: string;
       weight?: number;
-      priority?: number;
-      correlationId?: string;
     }
   ) {
-    const record = await this.tasks.enqueue({
-      code: body.code,
-      payload: body.payload,
-      idempotencyKey: body.idempotencyKey ?? null,
-      scheduledAt: body.scheduledAt ? new Date(body.scheduledAt) : null,
-      weight: body.weight,
-      priority: body.priority ?? null,
-      correlationId: body.correlationId ?? null,
-      source: "http",
+    if (!this.tasks.has(name)) throw new NotFoundException(`unknown task '${name}'`);
+    return this.tasks.enqueue({
+      name,
+      data: body?.data,
+      scheduledAt: body?.scheduledAt ? new Date(body.scheduledAt) : undefined,
+      weight: body?.weight,
     });
-    return { publicId: record.publicId, status: record.status };
   }
 
-  @Get(":publicId")
-  async get(@Param("publicId") publicId: string) {
-    const r = await this.tasks.get(publicId);
+  @Get(":id")
+  async get(@Param("id") id: string) {
+    const r = await this.tasks.get(Number(id));
     if (!r) throw new NotFoundException();
     return r;
   }
 
   @Get()
-  async list(@Query("code") code: string | undefined, @Query("limit") limit: string | undefined) {
-    return this.tasks.list({ code, limit: limit ? Number(limit) : 50 });
+  async list() {
+    const [pending, finished, canceled] = await Promise.all([
+      this.tasks.list.pending(),
+      this.tasks.list.finished(),
+      this.tasks.list.canceled(),
+    ]);
+    return { pending, finished, canceled };
   }
 
-  @Post(":publicId/retry")
-  async retry(@Param("publicId") publicId: string) {
-    const r = await this.tasks.retry(publicId);
+  @Post(":id/cancel")
+  async cancel(@Param("id") id: string) {
+    const r = await this.tasks.cancel(Number(id));
     if (!r) throw new NotFoundException();
     return r;
   }
 
-  @Post(":publicId/cancel")
-  async cancel(@Param("publicId") publicId: string) {
-    const r = await this.tasks.cancel(publicId);
+  @Post(":id/replay")
+  async replay(
+    @Param("id") id: string,
+    @Body() body: { scheduledAt?: string }
+  ) {
+    const r = await this.tasks.replay(Number(id), {
+      scheduledAt: body?.scheduledAt ? new Date(body.scheduledAt) : undefined,
+    });
     if (!r) throw new NotFoundException();
     return r;
   }
@@ -204,56 +165,56 @@ export class DispatchedTaskController {
 
 ## 4) A handler file (`*.task.ts`)
 
-Same shape as your project's cron jobs. Single `defineTask({...})` exported as default.
-
-`src/jobs/dispatched-tasks/hello-world.task.ts`
+`src/jobs/delayed-task/hello-world.task.ts`
 
 ```ts
 import { defineTask } from "@naskot/node-dispatched-tasks";
-import { z } from "zod";
 
-const task = defineTask({
-  code: "HELLO_WORLD",
+export default defineTask({
+  name: "HELLO_WORLD",
   weight: 1,
-  maxAttempts: 3,
   timeoutMs: 30_000,
-  inputSchema: z.object({ name: z.string() }),
-  run: async (payload, ctx) => {
-    console.info(`[task ${ctx.publicId}] hello, ${payload.name}!`);
-    return { greeted: payload.name };
+  run: (data, ctx) => {
+    console.info(`[task ${ctx.id}] HELLO_WORLD`, data);
+    return { ok: true };
   },
 });
-
-export default task;
 ```
 
-Register at boot (e.g. via an `OnApplicationBootstrap` hook):
+Register at boot — only the master process should also `start()` the scheduler:
 
 ```ts
 import { Injectable, OnApplicationBootstrap } from "@nestjs/common";
-import { DispatchedTaskService } from "./dispatched-tasks/dispatched-task.service.js";
-import helloWorld from "./jobs/dispatched-tasks/hello-world.task.js";
+import { DelayedTaskService } from "./delayed-tasks/delayed-tasks.service.js";
+import helloWorld from "./jobs/delayed-task/hello-world.task.js";
 
 @Injectable()
 export class TaskRegistration implements OnApplicationBootstrap {
-  constructor(private readonly tasks: DispatchedTaskService) {}
+  constructor(private readonly tasks: DelayedTaskService) {}
+
   onApplicationBootstrap() {
     this.tasks.register(helloWorld);
+    const isMaster =
+      process.env.NODE_APP_INSTANCE === undefined ||
+      process.env.NODE_APP_INSTANCE === "0";
+    if (isMaster) this.tasks.start();
   }
 }
 ```
+
+> If you use a runtime-bootstrap framework (e.g. `@naskot/node-runtime-bootstrap`), put `tasks.start()` inside the `once()` hook of an initializer file — that hook is invoked only on the master process.
 
 ---
 
 ## 5) `main.ts`
 
 ```ts
-import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { AppModule } from "./app.module.js";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.enableShutdownHooks();
   await app.listen(Number(process.env.PORT ?? 3000));
 }
 
@@ -262,85 +223,13 @@ void bootstrap();
 
 ---
 
-## 6) Custom table name (optional)
+## 6) Production notes
 
-Default SQL table is `dispatched_task`. With NestJS, the cleanest pattern is to pass `tableName` to the `DispatchedTaskService` options and use `taskStoreFactory` so the store is built lazily AFTER the DataSource is initialized in `onApplicationBootstrap`. The provider must return an **uninitialized** DataSource so the service constructor runs first:
-
-```ts
-// dispatched-task.service.ts
-import IORedis, { type Redis } from "ioredis";
-import { Inject, Injectable, OnApplicationBootstrap, OnApplicationShutdown } from "@nestjs/common";
-import { DataSource } from "typeorm";
-import {
-  DispatchedTask,
-  DispatchedTaskService as LibService,
-  RedisPriorityIndex,
-  TypeOrmTaskStore,
-} from "@naskot/node-dispatched-tasks";
-
-export const DT_DATA_SOURCE = "DT_DATA_SOURCE";
-export const DT_REDIS = "DT_REDIS";
-
-// Provider returns the DataSource UNINITIALIZED so the service constructor
-// (which applies `tableName` via `configureDispatchedTask`) runs first.
-export const dataSourceProvider = {
-  provide: DT_DATA_SOURCE,
-  useFactory: () =>
-    new DataSource({
-      type: "mariadb",
-      entities: [DispatchedTask],
-      // ... other options
-    }),
-};
-
-@Injectable()
-export class DispatchedTaskService implements OnApplicationBootstrap, OnApplicationShutdown {
-  private readonly lib: LibService;
-
-  constructor(
-    @Inject(DT_DATA_SOURCE) private readonly dataSource: DataSource,
-    @Inject(DT_REDIS) private readonly redis: Redis
-  ) {
-    this.lib = new LibService({
-      tableName: process.env.DT_TABLE_NAME,
-      taskStoreFactory: () => new TypeOrmTaskStore({ repository: this.dataSource.getRepository(DispatchedTask) }),
-      priority: new RedisPriorityIndex({ redis, namespace: "dispatched-tasks" }),
-      workerId: process.env.WORKER_ID ?? "nest-worker",
-      scheduler: { enabled: true },
-    });
-  }
-
-  async onApplicationBootstrap() {
-    await this.dataSource.initialize();
-    await this.lib.start();
-  }
-
-  async onApplicationShutdown() {
-    await this.lib.stop();
-    if (this.dataSource.isInitialized) await this.dataSource.destroy();
-  }
-}
-```
-
-Alternative — if you prefer to apply the override yourself before any service is built, the standalone `configureDispatchedTask({ tableName })` is also exported and is what the service uses internally.
-
-Notes:
-
-- Empty or unset `tableName` keeps the default `dispatched_task`.
-- The override is idempotent: subsequent attempts to change the table name are no-ops.
-- The Redis namespace (`new RedisPriorityIndex({ namespace: ... })`) is a **separate** concern; it has nothing to do with the SQL table name and should not be set to the same value.
+- **Required envs (resolved in the provider layer)**: `DT_REDIS_HOST`, `DT_REDIS_PORT`, optional `DT_REDIS_PASSWORD`, `DT_NAMESPACE`, `DT_MAX_TASKS`, `DT_POLL_INTERVAL_MS`.
+- **Single scheduler**: only call `start()` on the master process. Other PM2 workers can still `enqueue`/`cancel`/`replay`/`list` against the same namespace — they just skip `start()`.
+- **Validation**: validate `data` at the controller boundary (e.g. with `class-validator` or a hand-rolled check) before calling `enqueue` — the lib does not validate `data`.
+- **Crash recovery**: a process crash mid-execution leaves a task in `<NS>:PENDING:task-<id>` with `status = "running"`. The scheduler does not re-pick it on restart; expose an admin route to surface running tasks and `replay` them manually.
 
 ---
 
-## 7) Production notes
-
-- **Required envs (resolved in the provider layer)**: `DT_REDIS_HOST`, `DT_REDIS_PORT`, `DT_REDIS_NAMESPACE`, `DT_DB_HOST`, `DT_DB_PORT`, `DT_DB_NAME`, `DT_DB_USER`, `DT_DB_PASSWORD`, optionally `WORKER_ID`.
-- **`reflect-metadata`**: import once at the top of `main.ts` for both NestJS and TypeORM decorators.
-- **Migrations**: replace `synchronize: true` with TypeORM migrations in production.
-- **Multi-process**: in PM2 cluster mode, every worker can run the scheduler. The Redis ZSET claim is atomic.
-- **Validation**: prefer Zod `inputSchema` on every task — fails fast at enqueue time.
-- **Tests**: the lib ships interface contracts. For unit tests, use the in-memory adapters under `test/fixtures/` of this repo as a reference.
-
----
-
-[← Back to README](../README.md) · [Express guide →](./express.md)
+[← Back to README](../README.md) · [Express guide](./express.md)

@@ -1,157 +1,145 @@
 # @naskot/node-dispatched-tasks
 
-> Persisted, weight-aware async task dispatcher for Node microservices.
-> Hybrid storage: **MariaDB** (source of truth, via TypeORM) + **Redis** (priority index).
-> Framework-agnostic — works the same way under **Express** or **NestJS**.
+> Lightweight Redis-backed delayed-task scheduler for Node microservices.
+> Weight-aware execution, integer auto-increment IDs, framework-agnostic.
 
-## What problem does it solve?
+## What it does
 
-When microservices exchange work over HTTP or RabbitMQ, the receiver often needs to:
+Persist a task in Redis with a name (matching a registered handler), a `data` payload, a `scheduledAt` (Date or timestamp), and a `weight`. The library polls Redis once per second (configurable), picks every pending task whose `scheduledAt` is in the past, and executes the registered handler — provided the running weight stays under a configurable cap (`maxTasks`, default 5).
 
-- Persist the request so it survives a crash.
-- Schedule work fairly across many concurrent requests.
-- Cap how much load is in flight at any time.
-- Retry transient failures with backoff.
-- Optionally defer work ("run this Friday at 14:00").
-- Optionally deduplicate retransmissions ("this is the same request, don't run twice").
-- Stay agnostic to the HTTP framework wrapping it.
-
-`@naskot/node-dispatched-tasks` provides exactly that primitive: a **task service** that you wire into any Node app.
-You register handler functions with a stable `code`. You enqueue tasks by `code`. The library persists, schedules, claims atomically across workers, executes, retries, and reports — independently of how the request arrived.
-
-## Architecture in one minute
+Tasks transition between three Redis buckets:
 
 ```
-┌──────────────────┐  enqueue(code, payload)   ┌────────────────────┐
-│ HTTP / AMQP /    │ ────────────────────────► │ DispatchedTaskSvc  │
-│ Cron / Internal  │                            └─────────┬──────────┘
-└──────────────────┘                                       │
-                                                           ▼
-                                              ┌────────────────────────┐
-                                              │ MariaDB (TypeORM)      │   <— source of truth
-                                              │ table dispatched_task  │
-                                              └────────────┬───────────┘
-                                                           │
-                                                           ▼
-                                              ┌────────────────────────┐
-                                              │ Redis ZSET (priority)  │   <— scheduling index
-                                              │ ZPOPMIN atomic claim   │
-                                              └────────────┬───────────┘
-                                                           │
-                                                           ▼
-                                              ┌────────────────────────┐
-                                              │ Scheduler              │
-                                              │ - token bucket         │
-                                              │ - timeout / abort      │
-                                              │ - retry / backoff      │
-                                              └────────────┬───────────┘
-                                                           │ run()
-                                                           ▼
-                                              ┌────────────────────────┐
-                                              │ Your handler function  │
-                                              └────────────────────────┘
+<NS>:PENDING:task-<id>     ← created or replayed
+<NS>:FINISH:task-<id>      ← succeeded or definitively failed
+<NS>:CANCELED:task-<id>    ← cancelled (can be replayed)
 ```
 
-- **MariaDB** holds the durable record. The DB is hit only at task creation, claim (PK lookup), and terminal state — never polled.
-- **Redis** holds the operational priority index. The scheduler polls Redis (sub-millisecond) and uses `ZPOPMIN` for atomic claim across workers.
-- **Recovery** at boot: any task left `pending` / `claimed` / `running` / `failed` is re-pushed into the index. Crashes do not lose work.
-
-## Features
-
-- **Persistent tasks** survive crashes (MariaDB).
-- **Priority + FIFO** queue (Redis ZSET, score = `-priority * 1e13 + createdAt`).
-- **Weight-based capacity** (token bucket): scheduler picks tasks while `Σ(running.weight) ≤ MAX_CONCURRENT_WEIGHT`, with an additional `MAX_CONCURRENT_TASKS` cap.
-- **Multi-worker safe**: `ZPOPMIN` is atomic in Redis — N PM2 workers can run the scheduler concurrently without locking.
-- **Retry with backoff**: `linear`, `exp`, `fixed`, or custom `fn` per task.
-- **Timeout** with `AbortSignal` propagated to the handler.
-- **Scheduled tasks**: pass `scheduledAt` to defer execution.
-- **Idempotency** (opt-in): pass `idempotencyKey` to dedupe duplicate submissions.
-- **Admin operations**: `get`, `list`, `retry`, `cancel`.
-- **Validation** (opt-in): pass a `inputSchema` (Zod) and the lib validates before persistence.
-- **Configurable Redis namespace** so multiple consumers can share a Redis instance without collision.
-- **Framework-agnostic**: no Express, no NestJS, no HMAC dependency. Wire it however you want.
+IDs are integers, auto-incremented via `INCR <NS>:counter`.
 
 ## Configuration rule
 
-> The library never reads `process.env`.
-> Read environment variables in your service/provider layer, then pass plain config objects (Redis client, TypeORM Repository, options) to the library.
+The library never reads `process.env`. The host application reads env in its service/provider layer and passes plain options.
 
-This keeps the library deterministic and testable, and lets each consumer (Express, NestJS, Lambda, etc.) handle env injection in its own idiomatic way.
+Required:
 
-### Custom table name (optional)
+- `redis` — an `ioredis` `Redis` instance, already created.
+- `namespace` — Redis key namespace (e.g. `delayed-tasks`).
 
-The default SQL table name is `dispatched_task`. Pass `tableName` to the `DispatchedTaskService` constructor to override it (table + index names) — the service applies it before any TypeORM `DataSource` is initialized. See the [Express](./docs/express.md) and [NestJS](./docs/nestjs.md) integration guides for runnable examples.
+Optional:
+
+- `maxTasks` — cap on the sum of running task weights (default `5`).
+- `pollIntervalMs` — scheduler tick interval (default `1000`).
+- `logger` — `Logger` (`info`, `warn`, `error`, optional `debug`).
+
+## Single-master rule
+
+The scheduler must run on **only one process** at a time (typically PM2 instance `0`).
+The library does not detect this — your bootstrap code must call `service.start()` only on the master process and `service.stop()` on shutdown.
 
 ## Install
 
 ```bash
-npm i @naskot/node-dispatched-tasks
-```
-
-Peer dependencies (you bring your own version):
-
-```bash
-npm i ioredis typeorm zod reflect-metadata
+npm i @naskot/node-dispatched-tasks ioredis
 ```
 
 ## Integration guides
 
 - [Express](./docs/express.md) — service file, routes, handler, end-to-end snippet.
 - [NestJS](./docs/nestjs.md) — module, provider, controller, handler, end-to-end snippet.
-- [Database (without TypeORM)](./docs/database.md) — canonical MariaDB schema and a hand-rolled `TaskStore` skeleton.
 
 ## POC
 
-A runnable end-to-end POC lives in [`./poc`](./poc) :
+A runnable end-to-end POC lives in [`./poc`](./poc):
 
 ```
 docker compose up --build
 ```
 
-It boots three apps (1 NestJS task holder + 1 Express emitter + 1 NestJS emitter), MariaDB, Redis, and phpMyAdmin. The two emitters dispatch tasks to the holder, the holder runs them and fetches back to both. Logs + phpMyAdmin (`http://localhost:8080`) + RedisInsight (`localhost:6079`) let you observe everything.
+Boots Redis + RedisInsight + a NestJS owner (handlers + scheduler) + a NestJS emitter and an Express emitter (both producer-only). See [`poc/README.md`](./poc/README.md).
 
-## Public API
+## API
 
 ```ts
-// Service
-class DispatchedTaskService {
-  constructor(options: DispatchedTaskServiceOptions); // accepts `tableName?` and `taskStoreFactory?` (lazy alternative to `store`)
+class DelayedTaskService {
+  constructor(options: DelayedTaskServiceOptions);
+
   register(definition: TaskDefinition): void;
+  has(name: string): boolean;
+
   enqueue(input: EnqueueInput): Promise<TaskRecord>;
-  get(publicId: string): Promise<TaskRecord | null>;
-  list(filters: TaskListFilters): Promise<TaskRecord[]>;
-  retry(publicId: string): Promise<TaskRecord | null>;
-  cancel(publicId: string): Promise<TaskRecord | null>;
+  cancel(id: number): Promise<TaskRecord | null>;
+  replay(id: number, options?: ReplayOptions): Promise<TaskRecord | null>;
+  get(id: number): Promise<TaskRecord | null>;
+
+  list: {
+    pending(): Promise<TaskRecord[]>;
+    finished(): Promise<TaskRecord[]>;
+    canceled(): Promise<TaskRecord[]>;
+  };
+
   start(): Promise<void>;
   stop(): Promise<void>;
 }
 
-// Handler factory
-function defineTask<P, R>(input: DefineTaskInput<P, R>): TaskDefinition<P, R>;
-
-// Adapters
-class TypeOrmTaskStore implements TaskStore;
-class RedisPriorityIndex implements PriorityIndex;
-
-// Entity (TypeORM, register in your DataSource)
-class DispatchedTask;                                   // table name "dispatched_task" by default
-function configureDispatchedTask(opts: { tableName?: string }); // optional override of table + index names
+function defineTask<P, R>(input: TaskDefinition<P, R>): TaskDefinition<P, R>;
 ```
 
-## Development
+### Task definition
 
-```bash
-npm ci
-npm run lint
-npm run typecheck
-npm test
-npm run build
 ```
+{
+  name: "HELLO_WORLD",   // unique identifier matching enqueue input
+  weight?: 1,            // default weight; overridable per enqueue
+  timeoutMs?: 30_000,    // optional timeout (AbortSignal in ctx.signal)
+  run: async (data, ctx) => { ... }
+}
+```
+
+### Enqueue input
+
+```
+{
+  name: "HELLO_WORLD",
+  data?: any,                  // arbitrary serializable payload
+  scheduledAt?: Date | number, // Date or ms epoch; defaults to now
+  weight?: 2,                  // overrides definition weight
+}
+```
+
+### Replay
+
+```
+service.replay(id);                              // re-run as soon as possible
+service.replay(id, { scheduledAt: futureDate }); // re-run later
+```
+
+If `scheduledAt` is omitted, the original `scheduledAt` is preserved (the scheduler may pick the task up immediately if that timestamp is in the past).
+
+## Lifecycle expectations
+
+- **Cancel**: only valid for a pending task that has not yet started (`status === "pending"`). Returns `null` if the task is `running`, `finished`, `failed`, or already `canceled`.
+- **Replay**: only valid for a task in the `CANCELED` bucket.
+- **Failures**: a task whose handler throws (or whose `timeoutMs` elapses) is moved to `FINISH` with `status = "failed"` and a populated `error`.
+- **Missing handler**: a pending task whose `name` is no longer registered is moved to `FINISH` with `status = "failed"`.
+
+## Weight semantics
+
+Each task has a `weight`. The scheduler maintains a running sum of weights of in-flight tasks and only starts the next pending task if the sum after start would not exceed `maxTasks`.
+
+Examples with `maxTasks = 5`:
+
+- task A (weight 3) and task B (weight 3) → only one runs at a time.
+- task A (weight 3) and task B (weight 2) → both run concurrently.
+
+Weights must be positive numbers.
 
 ## Notes
 
 - **Node**: requires Node ≥ 18.
-- **Decorators**: TypeORM entity uses experimental decorators. Consumers must enable `experimentalDecorators` and `emitDecoratorMetadata` in their `tsconfig.json`, and `import "reflect-metadata"` once at process start.
-- **Migrations**: the library does not run migrations. Either let TypeORM `synchronize: true` create the table in dev, or generate a migration with `typeorm migration:generate` against the entity.
-- **Multi-leader**: by default any worker can run the scheduler. Atomic claim via `ZPOPMIN` makes this safe.
-- **Time**: schedule times are stored as `datetime(3)` in MariaDB. The scheduler treats `scheduledAt <= now` as ready.
+- **Redis only**: no MariaDB, no TypeORM, no migrations. The library does not own the Redis connection — pass it in and dispose of it yourself.
+- **Crash recovery**: a process crash mid-execution leaves the task in `PENDING` with `status = "running"`. On the next start, the scheduler ignores `running` rows; you can `replay` them manually if needed (future versions may auto-recover).
+
+## License
+
+MIT.

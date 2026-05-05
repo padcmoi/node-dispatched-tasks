@@ -1,22 +1,20 @@
-FROM node:24-alpine AS lib-build
-WORKDIR /build
-COPY package.json tsconfig.json ./
-RUN npm install --no-audit --no-fund
+FROM node:20-alpine AS lib-build
+WORKDIR /lib
+COPY package.json package-lock.json* ./
+COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build
+RUN npm install --no-audit --no-fund && npm run build
 
-FROM node:24-alpine
-WORKDIR /build
-COPY --from=lib-build /build/package.json ./package.json
-COPY --from=lib-build /build/dist ./dist
+FROM node:20-alpine
+WORKDIR /app
+COPY --from=lib-build /lib/dist /app/lib/dist
+COPY --from=lib-build /lib/package.json /app/lib/package.json
 
-WORKDIR /build/poc/nestjs-emitter
-COPY poc/nestjs-emitter/package.json ./
-COPY poc/nestjs-emitter/tsconfig.json ./
-RUN npm install --no-audit --no-fund
-RUN ln -s /build/poc/nestjs-emitter/node_modules /build/node_modules
+COPY poc/nestjs-emitter/package.json poc/nestjs-emitter/tsconfig.json ./
 COPY poc/nestjs-emitter/src ./src
-RUN npm run build
 
-EXPOSE 3000
-CMD ["npm", "run", "start"]
+RUN npm pkg set dependencies.@naskot/node-dispatched-tasks=file:./lib && \
+    npm install --no-audit --no-fund && \
+    npx tsc -p tsconfig.json
+
+CMD ["node", "dist/main.js"]

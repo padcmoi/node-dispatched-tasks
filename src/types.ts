@@ -1,0 +1,49 @@
+export type TaskStatus = "pending" | "running" | "finished" | "canceled" | "failed";
+
+export interface TaskRecord {
+  id: number;
+  name: string;
+  data: unknown;
+  scheduledAt: string;
+  scheduledAtMs: number;
+  weight: number;
+  status: TaskStatus;
+  attempts: number;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  canceledAt: string | null;
+  result: unknown;
+  error: string | null;
+}
+
+export interface EnqueueInput {
+  name: string;
+  data?: unknown;
+  scheduledAt?: Date | number;
+  weight?: number;
+}
+
+export interface ReplayOptions {
+  scheduledAt?: Date | number;
+}
+
+export interface RunContext {
+  id: number;
+  name: string;
+  signal: AbortSignal;
+}
+
+export interface TaskDefinition<P = unknown, R = unknown> {
+  name: string;
+  weight?: number;
+  timeoutMs?: number;
+  run: (data: P, ctx: RunContext) => Promise<R> | R;
+}
+
+export interface Logger {
+  info: (message: string, meta?: unknown) => void;
+  warn: (message: string, meta?: unknown) => void;
+  error: (message: string, meta?: unknown) => void;
+  debug?: (message: string, meta?: unknown) => void;
+}
