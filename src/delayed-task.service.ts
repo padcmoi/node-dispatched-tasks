@@ -4,7 +4,7 @@ import { RedisStore } from "./redis-store.js";
 import { resolveScheduledAt } from "./schedule.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRegistry } from "./task-registry.js";
-import type { EnqueueInput, Logger, ReplayOptions, TaskDefinition, TaskRecord } from "./types.js";
+import type { EnqueueInput, Logger, ReplayOptions, TaskDefinition, TaskRecord, TypedEnqueueOptions } from "./types.js";
 
 export interface DelayedTaskServiceOptions {
   redis: Redis;
@@ -69,15 +69,22 @@ export class DelayedTaskService {
     };
   }
 
-  register(definition: TaskDefinition) {
-    this.registry.register(definition);
+  register<P, R>(definition: TaskDefinition<P, R>) {
+    this.registry.register(definition as TaskDefinition);
   }
 
   has(name: string) {
     return this.registry.has(name);
   }
 
-  async enqueue(input: EnqueueInput) {
+  // eslint-disable-next-line no-restricted-syntax -- overload signatures require explicit return types
+  async enqueue(input: EnqueueInput): Promise<TaskRecord>;
+  // eslint-disable-next-line no-restricted-syntax -- overload signatures require explicit return types
+  async enqueue<P, R>(definition: TaskDefinition<P, R>, options?: TypedEnqueueOptions<P>): Promise<TaskRecord>;
+  async enqueue(arg1: EnqueueInput | TaskDefinition, arg2?: TypedEnqueueOptions<unknown>) {
+    const input: EnqueueInput = isTaskDefinition(arg1)
+      ? { name: arg1.name, data: arg2?.data, scheduledAt: arg2?.scheduledAt, weight: arg2?.weight }
+      : arg1;
     if (typeof input.name !== "string" || input.name.trim() === "") {
       throw new Error("enqueue: 'name' is required");
     }
@@ -198,4 +205,11 @@ export class DelayedTaskService {
     this.started = false;
     this.logger.info("[delayed-tasks] scheduler stopped");
   }
+}
+
+// eslint-disable-next-line no-restricted-syntax -- type predicate requires explicit return type
+function isTaskDefinition(value: unknown): value is TaskDefinition {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as { name?: unknown; run?: unknown };
+  return typeof v.name === "string" && typeof v.run === "function";
 }

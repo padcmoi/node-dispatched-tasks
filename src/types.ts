@@ -33,6 +33,16 @@ export interface EnqueueInput {
   weight?: number;
 }
 
+/**
+ * Options for the typed `enqueue(definition, options)` overload.
+ * `P` is inferred from the `TaskDefinition` so `data` is constrained automatically.
+ */
+export interface TypedEnqueueOptions<P> {
+  data?: P;
+  scheduledAt?: ScheduledAtInput;
+  weight?: number;
+}
+
 export interface ReplayOptions {
   scheduledAt?: ScheduledAtInput;
 }

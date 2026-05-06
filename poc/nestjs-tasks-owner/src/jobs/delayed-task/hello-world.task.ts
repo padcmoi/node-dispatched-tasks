@@ -1,11 +1,21 @@
 import { defineTask } from "@naskot/node-dispatched-tasks";
 
-export default defineTask({
+export interface HelloWorldData {
+  message?: string;
+}
+
+export interface HelloWorldResult {
+  ok: true;
+  greeted: string;
+}
+
+export default defineTask<HelloWorldData, HelloWorldResult>({
   name: "HELLO_WORLD",
   weight: 1,
   timeoutMs: 30_000,
   run: (data, ctx) => {
-    console.info(`[task ${String(ctx.id)}] HELLO_WORLD`, data);
-    return { ok: true, message: "hello world" };
+    const greeted = data.message ?? "world";
+    console.info(`[task ${String(ctx.id)}] HELLO_WORLD → ${greeted}`);
+    return { ok: true, greeted };
   },
 });

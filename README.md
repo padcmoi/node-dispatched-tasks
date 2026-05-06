@@ -69,6 +69,7 @@ class DelayedTaskService {
   has(name: string): boolean;
 
   enqueue(input: EnqueueInput): Promise<TaskRecord>;
+  enqueue<P, R>(definition: TaskDefinition<P, R>, options?: TypedEnqueueOptions<P>): Promise<TaskRecord>;
   cancel(id: number): Promise<TaskRecord | null>;
   replay(id: number, options?: ReplayOptions): Promise<TaskRecord | null>;
   setWeight(id: number, weight: number): Promise<TaskRecord | null>;

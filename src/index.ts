@@ -18,4 +18,5 @@ export type {
   TaskDefinition,
   TaskRecord,
   TaskStatus,
+  TypedEnqueueOptions,
 } from "./types.js";

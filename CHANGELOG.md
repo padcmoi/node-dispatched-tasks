@@ -9,6 +9,7 @@
 - Weight-aware execution capped by `maxWeight` (default 5): a task starts only if `Σ(running.weight) + task.weight <= maxWeight`.
 - Service API: `enqueue`, `cancel`, `replay`, `setWeight`, `get`, `has`, `list.pending`, `list.finished`, `list.failed`, `list.canceled`, `start`, `stop`.
 - `enqueue` clamps `weight` to the live `maxWeight`. `setWeight(id, weight)` updates a still-pending task's weight (also clamped) — useful when `maxWeight` was lowered between deploys.
+- Typed dispatch: `enqueue(definition, options)` overload infers `options.data` from the `TaskDefinition<P>` generic. `defineTask<P, R>` already typed `data` inside `run`; this propagates the type all the way to the call site.
 - Cancelled or failed tasks can be replayed; `replay(id)` auto-detects the source bucket (`CANCELED` or `FAILED`) and accepts an optional future `scheduledAt` (otherwise keeps the original).
 - `scheduledAt` accepts `Date`, `number` (seconds from now), or `string` (ISO date or numeric seconds-from-now).
 - `resolveScheduledAt` exported as a public utility.

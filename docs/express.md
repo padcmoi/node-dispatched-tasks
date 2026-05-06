@@ -129,6 +129,23 @@ await delayedTaskService.enqueue({ name: "HEAVY", weight: 4 });
 
 `scheduledAt` accepts `Date`, `number` (seconds from now), or `string` (ISO date or numeric seconds-from-now). Omitted → run immediately.
 
+#### Typed dispatch
+
+`defineTask<P, R>` typing the `data` payload propagates to a second `enqueue` overload that accepts the definition directly:
+
+```ts
+const sendEmail = defineTask<{ to: string; subject: string }>({
+  name: "SEND_EMAIL",
+  run: (data) => {
+    /* data is { to, subject } */
+  },
+});
+delayedTaskService.register(sendEmail);
+
+// `data` is constrained at compile time to { to, subject }
+await delayedTaskService.enqueue(sendEmail, { data: { to: "u@x", subject: "Hi" }, scheduledAt: 30 });
+```
+
 ### `cancel(id)`
 
 Move a `PENDING` task to the `CANCELED` bucket. Returns `null` if the id is unknown or the task is already running/finished/canceled.

@@ -5,6 +5,8 @@ import {
   type EnqueueInput,
   type ReplayOptions,
   type TaskDefinition,
+  type TaskRecord,
+  type TypedEnqueueOptions,
 } from "@naskot/node-dispatched-tasks";
 import helloWorld from "../jobs/delayed-task/hello-world.task.js";
 import heavy from "../jobs/delayed-task/heavy.task.js";
@@ -43,14 +45,20 @@ export class DelayedTaskService implements OnApplicationBootstrap, OnApplication
     }
   }
 
-  register(definition: TaskDefinition) {
+  register<P, R>(definition: TaskDefinition<P, R>) {
     this.lib.register(definition);
   }
   has(name: string) {
     return this.lib.has(name);
   }
-  enqueue(input: EnqueueInput) {
-    return this.lib.enqueue(input);
+  // eslint-disable-next-line no-restricted-syntax -- overload signatures require explicit return types
+  enqueue(input: EnqueueInput): Promise<TaskRecord>;
+  // eslint-disable-next-line no-restricted-syntax -- overload signatures require explicit return types
+  enqueue<P, R>(definition: TaskDefinition<P, R>, options?: TypedEnqueueOptions<P>): Promise<TaskRecord>;
+  enqueue(arg1: EnqueueInput | TaskDefinition, arg2?: TypedEnqueueOptions<unknown>) {
+    return arg1 && typeof (arg1 as TaskDefinition).run === "function"
+      ? this.lib.enqueue(arg1 as TaskDefinition, arg2)
+      : this.lib.enqueue(arg1 as EnqueueInput);
   }
   cancel(id: number) {
     return this.lib.cancel(id);

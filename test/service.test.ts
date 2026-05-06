@@ -138,6 +138,66 @@ describe("DelayedTaskService — enqueue and scheduledAt", () => {
     expect(c.weight).toBe(3);
   });
 
+  it("typed overload: enqueue(definition, { data }) constrains data to the task's P", async () => {
+    const service = new DelayedTaskService({ redis: createRedis(), namespace: "e-typed" });
+    const sendEmail = defineTask<{ to: string; subject: string }, { sent: boolean }>({
+      name: "SEND_EMAIL",
+      run: () => ({ sent: true }),
+    });
+    service.register(sendEmail);
+
+    const record = await service.enqueue(sendEmail, {
+      data: { to: "user@example.com", subject: "Hi" },
+      scheduledAt: 5,
+    });
+
+    expect(record.name).toBe("SEND_EMAIL");
+    expect(record.data).toEqual({ to: "user@example.com", subject: "Hi" });
+    expect(record.scheduledAtMs).toBe(NOW + 5_000);
+  });
+
+  it("typed overload: data flows from enqueue → handler with the correct shape", async () => {
+    interface EmailPayload {
+      to: string;
+      subject: string;
+    }
+    const service = new DelayedTaskService({ redis: createRedis(), namespace: "e-typed-flow", pollIntervalMs: 50 });
+    const captured: EmailPayload[] = [];
+    const sendEmail = defineTask<EmailPayload, { sent: true }>({
+      name: "SEND_EMAIL",
+      run: (data) => {
+        captured.push(data);
+        return { sent: true };
+      },
+    });
+    service.register(sendEmail);
+
+    await service.enqueue(sendEmail, { data: { to: "a@x", subject: "S1" } });
+    await service.enqueue(sendEmail, { data: { to: "b@x", subject: "S2" } });
+
+    service.start();
+    await vi.advanceTimersByTimeAsync(200);
+    await service.stop();
+
+    expect(captured).toEqual([
+      { to: "a@x", subject: "S1" },
+      { to: "b@x", subject: "S2" },
+    ]);
+    const finished = await service.list.finished();
+    expect(finished).toHaveLength(2);
+    expect(finished.map((r) => r.result)).toEqual([{ sent: true }, { sent: true }]);
+  });
+
+  it("typed overload: also accepts no second argument", async () => {
+    const service = new DelayedTaskService({ redis: createRedis(), namespace: "e-typed-bare" });
+    const ping = defineTask({ name: "PING", run: () => undefined });
+    service.register(ping);
+
+    const record = await service.enqueue(ping);
+    expect(record.name).toBe("PING");
+    expect(record.data).toBeNull();
+  });
+
   it("auto-increments task IDs", async () => {
     const service = setup("e10");
     const a = await service.enqueue({ name: "HELLO" });

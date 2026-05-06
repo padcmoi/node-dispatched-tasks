@@ -1,9 +1,21 @@
 import { Body, Controller, Get, HttpCode, NotFoundException, Param, Post, Query } from "@nestjs/common";
 import { DelayedTaskService } from "./delayed-tasks.service.js";
+import heavy, { type HeavyData } from "../jobs/delayed-task/heavy.task.js";
 
 @Controller("tasks")
 export class DelayedTaskController {
   constructor(private readonly tasks: DelayedTaskService) {}
+
+  // Demonstrates the typed `enqueue(definition, options)` overload:
+  // `body.data` is constrained to HeavyData at compile time, no `unknown`.
+  @Post("heavy")
+  @HttpCode(202)
+  async enqueueHeavy(@Body() body: { data: HeavyData; scheduledAt?: string }) {
+    return this.tasks.enqueue(heavy, {
+      data: body.data,
+      scheduledAt: body?.scheduledAt ? new Date(body.scheduledAt) : undefined,
+    });
+  }
 
   @Post()
   @HttpCode(202)
