@@ -8,6 +8,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@naskot/node-dispatched-tasks": "file:../../",
     "express": "^4.21.0",
     "ioredis": "^5.4.1"
   },
