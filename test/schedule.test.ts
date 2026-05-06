@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveScheduledAt } from "../src/index.js";
+import { resolveScheduledAt } from "../src/schedule.js";
 
 describe("resolveScheduledAt", () => {
   const NOW = new Date("2026-05-05T18:00:00.000Z").getTime();
