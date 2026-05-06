@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## [Unreleased] - yyyy-mm-dd
+## [1.0.0] - 2026-05-06
 
 - Pure-Redis storage. No MariaDB, no TypeORM, no entity, no migrations.
 - Four buckets per namespace: `<NS>:PENDING:task-<id>`, `<NS>:FINISH:task-<id>` (success), `<NS>:FAILED:task-<id>` (handler error / timeout / no handler), `<NS>:CANCELED:task-<id>` (replayable).
