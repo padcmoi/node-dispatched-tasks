@@ -23,6 +23,7 @@ export class DelayedTaskService implements OnApplicationBootstrap, OnApplication
       namespace: process.env.DT_NAMESPACE ?? "delayed-tasks",
       maxWeight: Number(process.env.DT_MAX_WEIGHT ?? 5),
       pollIntervalMs: Number(process.env.DT_POLL_INTERVAL_MS ?? 1000),
+      finishedTtlDays: process.env.DT_FINISHED_TTL_DAYS ? Number(process.env.DT_FINISHED_TTL_DAYS) : undefined,
       logger: console,
     });
   }
