@@ -3,11 +3,26 @@ import type { TaskRecord } from "./types.js";
 
 export type Bucket = "PENDING" | "FINISH" | "FAILED" | "CANCELED";
 
+export interface RedisStoreOptions {
+  /**
+   * Optional TTL in **seconds** applied to records written/moved into the FINISH bucket.
+   * `undefined` or `0` disables the TTL — FINISH records are kept indefinitely.
+   * Other buckets (PENDING / FAILED / CANCELED) are never affected.
+   */
+  finishTtlSeconds?: number;
+}
+
 export class RedisStore {
+  private readonly finishTtlSeconds: number;
+
   constructor(
     private readonly redis: Redis,
-    private readonly namespace: string
-  ) {}
+    private readonly namespace: string,
+    options: RedisStoreOptions = {}
+  ) {
+    const ttl = options.finishTtlSeconds ?? 0;
+    this.finishTtlSeconds = Number.isFinite(ttl) && ttl > 0 ? Math.floor(ttl) : 0;
+  }
 
   private key(bucket: Bucket, id: number) {
     return `${this.namespace}:${bucket}:task-${String(id)}`;
@@ -17,12 +32,22 @@ export class RedisStore {
     return `${this.namespace}:${bucket}:task-*`;
   }
 
+  private ttlFor(bucket: Bucket) {
+    return bucket === "FINISH" ? this.finishTtlSeconds : 0;
+  }
+
   async nextId() {
     return await this.redis.incr(`${this.namespace}:counter`);
   }
 
   async write(bucket: Bucket, record: TaskRecord) {
-    await this.redis.set(this.key(bucket, record.id), JSON.stringify(record));
+    const payload = JSON.stringify(record);
+    const ttl = this.ttlFor(bucket);
+    if (ttl > 0) {
+      await this.redis.set(this.key(bucket, record.id), payload, "EX", ttl);
+    } else {
+      await this.redis.set(this.key(bucket, record.id), payload);
+    }
   }
 
   async read(bucket: Bucket, id: number) {
@@ -31,8 +56,14 @@ export class RedisStore {
   }
 
   async move(from: Bucket, to: Bucket, record: TaskRecord) {
+    const payload = JSON.stringify(record);
+    const ttl = this.ttlFor(to);
     const pipeline = this.redis.multi();
-    pipeline.set(this.key(to, record.id), JSON.stringify(record));
+    if (ttl > 0) {
+      pipeline.set(this.key(to, record.id), payload, "EX", ttl);
+    } else {
+      pipeline.set(this.key(to, record.id), payload);
+    }
     pipeline.del(this.key(from, record.id));
     await pipeline.exec();
   }

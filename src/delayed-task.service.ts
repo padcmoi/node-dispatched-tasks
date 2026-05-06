@@ -11,6 +11,16 @@ export interface DelayedTaskServiceOptions {
   namespace: string;
   maxWeight?: number;
   pollIntervalMs?: number;
+  /**
+   * Optional retention window for the FINISH bucket, expressed in **days**.
+   * When set to a positive integer, every record written to FINISH gets a Redis
+   * TTL (`EXPIRE`) of `finishedTtlDays × 86400` seconds — successful tasks
+   * older than this window are auto-purged by Redis itself.
+   *
+   * Other buckets (PENDING / FAILED / CANCELED) are never affected.
+   * Defaults to disabled (records kept indefinitely).
+   */
+  finishedTtlDays?: number;
   logger?: Logger;
 }
 
@@ -47,12 +57,19 @@ export class DelayedTaskService {
     if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
       throw new Error("DelayedTaskService: 'pollIntervalMs' must be a positive number");
     }
+    const finishedTtlDays = options.finishedTtlDays;
+    if (finishedTtlDays !== undefined) {
+      if (!Number.isFinite(finishedTtlDays) || finishedTtlDays < 0) {
+        throw new Error("DelayedTaskService: 'finishedTtlDays' must be a non-negative number");
+      }
+    }
+    const finishTtlSeconds = finishedTtlDays !== undefined && finishedTtlDays > 0 ? Math.floor(finishedTtlDays * 86_400) : 0;
 
     this.namespace = options.namespace.trim();
     this.maxWeight = maxWeight;
     this.pollIntervalMs = pollIntervalMs;
     this.logger = options.logger ?? NOOP_LOGGER;
-    this.store = new RedisStore(options.redis, this.namespace);
+    this.store = new RedisStore(options.redis, this.namespace, { finishTtlSeconds });
     this.scheduler = new Scheduler({
       store: this.store,
       registry: this.registry,

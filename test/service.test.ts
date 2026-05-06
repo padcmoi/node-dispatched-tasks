@@ -531,3 +531,126 @@ describe("DelayedTaskService — scheduler runtime", () => {
     await service.stop();
   });
 });
+
+describe("DelayedTaskService — finishedTtlDays (FINISH bucket retention)", () => {
+  const NOW = new Date("2026-05-05T18:00:00.000Z").getTime();
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("constructor rejects negative finishedTtlDays", () => {
+    expect(() => new DelayedTaskService({ redis: createRedis(), namespace: "ttl-neg", finishedTtlDays: -1 })).toThrow(
+      /finishedTtlDays/
+    );
+  });
+
+  it("constructor rejects non-finite finishedTtlDays", () => {
+    expect(() => new DelayedTaskService({ redis: createRedis(), namespace: "ttl-nan", finishedTtlDays: Number.NaN })).toThrow(
+      /finishedTtlDays/
+    );
+  });
+
+  it("constructor accepts finishedTtlDays = 0 (disabled, same as undefined)", () => {
+    expect(() => new DelayedTaskService({ redis: createRedis(), namespace: "ttl-zero", finishedTtlDays: 0 })).not.toThrow();
+  });
+
+  it("does not set a TTL on FINISH keys when finishedTtlDays is undefined", async () => {
+    const redis = createRedis();
+    const service = new DelayedTaskService({ redis, namespace: "ttl-off", pollIntervalMs: 50 });
+    service.register(defineTask({ name: "DONE", run: () => ({ ok: true }) }));
+
+    const record = await service.enqueue({ name: "DONE" });
+    service.start();
+    await vi.advanceTimersByTimeAsync(200);
+    await service.stop();
+
+    const ttl = await redis.ttl(`ttl-off:FINISH:task-${String(record.id)}`);
+    expect(ttl).toBe(-1); // -1 = key exists with no expiration
+  });
+
+  it("applies TTL = finishedTtlDays × 86400 to FINISH keys when configured", async () => {
+    const redis = createRedis();
+    const days = 3;
+    const service = new DelayedTaskService({
+      redis,
+      namespace: "ttl-on",
+      finishedTtlDays: days,
+      pollIntervalMs: 50,
+    });
+    service.register(defineTask({ name: "DONE", run: () => ({ ok: true }) }));
+
+    const record = await service.enqueue({ name: "DONE" });
+    service.start();
+    await vi.advanceTimersByTimeAsync(200);
+    await service.stop();
+
+    const ttl = await redis.ttl(`ttl-on:FINISH:task-${String(record.id)}`);
+    const expected = days * 86_400;
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(expected);
+    expect(ttl).toBeGreaterThan(expected - 60); // allow loose timing slack
+  });
+
+  it("never applies a TTL to FAILED keys", async () => {
+    const redis = createRedis();
+    const service = new DelayedTaskService({
+      redis,
+      namespace: "ttl-failed",
+      finishedTtlDays: 7,
+      pollIntervalMs: 50,
+    });
+    service.register(
+      defineTask({
+        name: "BOOM",
+        run: () => {
+          throw new Error("kaboom");
+        },
+      })
+    );
+
+    const record = await service.enqueue({ name: "BOOM" });
+    service.start();
+    await vi.advanceTimersByTimeAsync(200);
+    await service.stop();
+
+    const ttl = await redis.ttl(`ttl-failed:FAILED:task-${String(record.id)}`);
+    expect(ttl).toBe(-1);
+  });
+
+  it("never applies a TTL to CANCELED keys", async () => {
+    const redis = createRedis();
+    const service = new DelayedTaskService({
+      redis,
+      namespace: "ttl-canceled",
+      finishedTtlDays: 7,
+    });
+    service.register(defineTask({ name: "HELLO", run: noop }));
+
+    const record = await service.enqueue({ name: "HELLO", scheduledAt: 60 });
+    await service.cancel(record.id);
+
+    const ttl = await redis.ttl(`ttl-canceled:CANCELED:task-${String(record.id)}`);
+    expect(ttl).toBe(-1);
+  });
+
+  it("never applies a TTL to PENDING keys", async () => {
+    const redis = createRedis();
+    const service = new DelayedTaskService({
+      redis,
+      namespace: "ttl-pending",
+      finishedTtlDays: 7,
+    });
+    service.register(defineTask({ name: "HELLO", run: noop }));
+
+    const record = await service.enqueue({ name: "HELLO", scheduledAt: 60 });
+
+    const ttl = await redis.ttl(`ttl-pending:PENDING:task-${String(record.id)}`);
+    expect(ttl).toBe(-1);
+  });
+});
