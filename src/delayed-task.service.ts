@@ -1,20 +1,15 @@
 import type { Redis } from "ioredis";
 import { HandlerNotFoundError } from "./errors.js";
 import { RedisStore } from "./redis-store.js";
+import { resolveScheduledAt } from "./schedule.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRegistry } from "./task-registry.js";
-import type {
-  EnqueueInput,
-  Logger,
-  ReplayOptions,
-  TaskDefinition,
-  TaskRecord,
-} from "./types.js";
+import type { EnqueueInput, Logger, ReplayOptions, TaskDefinition, TaskRecord } from "./types.js";
 
 export interface DelayedTaskServiceOptions {
   redis: Redis;
   namespace: string;
-  maxTasks?: number;
+  maxWeight?: number;
   pollIntervalMs?: number;
   logger?: Logger;
 }
@@ -31,7 +26,7 @@ export class DelayedTaskService {
   private readonly scheduler: Scheduler;
   private readonly logger: Logger;
   private readonly namespace: string;
-  private readonly maxTasks: number;
+  private readonly maxWeight: number;
   private readonly pollIntervalMs: number;
   private started = false;
 
@@ -44,9 +39,9 @@ export class DelayedTaskService {
     if (typeof options.namespace !== "string" || options.namespace.trim() === "") {
       throw new Error("DelayedTaskService: 'namespace' is required and cannot be empty");
     }
-    const maxTasks = options.maxTasks ?? 5;
-    if (!Number.isFinite(maxTasks) || maxTasks <= 0) {
-      throw new Error("DelayedTaskService: 'maxTasks' must be a positive number");
+    const maxWeight = options.maxWeight ?? 5;
+    if (!Number.isFinite(maxWeight) || maxWeight <= 0) {
+      throw new Error("DelayedTaskService: 'maxWeight' must be a positive number");
     }
     const pollIntervalMs = options.pollIntervalMs ?? 1000;
     if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
@@ -54,14 +49,14 @@ export class DelayedTaskService {
     }
 
     this.namespace = options.namespace.trim();
-    this.maxTasks = maxTasks;
+    this.maxWeight = maxWeight;
     this.pollIntervalMs = pollIntervalMs;
     this.logger = options.logger ?? NOOP_LOGGER;
     this.store = new RedisStore(options.redis, this.namespace);
     this.scheduler = new Scheduler({
       store: this.store,
       registry: this.registry,
-      maxTasks: this.maxTasks,
+      maxWeight: this.maxWeight,
       pollIntervalMs: this.pollIntervalMs,
       logger: this.logger,
     });
@@ -69,6 +64,7 @@ export class DelayedTaskService {
     this.list = {
       pending: () => this.store.list("PENDING"),
       finished: () => this.store.list("FINISH"),
+      failed: () => this.store.list("FAILED"),
       canceled: () => this.store.list("CANCELED"),
     };
   }
@@ -91,10 +87,12 @@ export class DelayedTaskService {
     const definition = this.registry.get(input.name);
     const id = await this.store.nextId();
     const scheduledAtMs = resolveScheduledAt(input.scheduledAt);
-    const weight = input.weight ?? definition.weight ?? 1;
-    if (!Number.isFinite(weight) || weight <= 0) {
+    const requested = input.weight ?? definition.weight ?? 1;
+    if (!Number.isFinite(requested) || requested <= 0) {
       throw new Error("enqueue: 'weight' must be a positive number");
     }
+    // Clamp at enqueue time so a task can never be created with a weight that exceeds maxWeight.
+    const weight = Math.min(requested, this.maxWeight);
     const now = new Date();
     const record: TaskRecord = {
       id,
@@ -126,8 +124,23 @@ export class DelayedTaskService {
     return (
       (await this.store.read("PENDING", id)) ??
       (await this.store.read("FINISH", id)) ??
+      (await this.store.read("FAILED", id)) ??
       (await this.store.read("CANCELED", id))
     );
+  }
+
+  async setWeight(id: number, weight: number) {
+    if (!Number.isFinite(weight) || weight <= 0) {
+      throw new Error("setWeight: 'weight' must be a positive number");
+    }
+    const pending = await this.store.read("PENDING", id);
+    if (!pending) return null;
+    if (pending.status !== "pending") return null;
+    const clamped = Math.min(weight, this.maxWeight);
+    const updated: TaskRecord = { ...pending, weight: clamped };
+    await this.store.write("PENDING", updated);
+    this.logger.info("[delayed-tasks] weight updated", { id, weight: clamped, requested: weight });
+    return updated;
   }
 
   async cancel(id: number) {
@@ -146,13 +159,13 @@ export class DelayedTaskService {
 
   async replay(id: number, options: ReplayOptions = {}) {
     const canceled = await this.store.read("CANCELED", id);
-    if (!canceled) return null;
-    const scheduledAtMs =
-      options.scheduledAt !== undefined
-        ? resolveScheduledAt(options.scheduledAt)
-        : canceled.scheduledAtMs;
+    const from: "CANCELED" | "FAILED" | null = canceled ? "CANCELED" : (await this.store.read("FAILED", id)) ? "FAILED" : null;
+    if (!from) return null;
+    const source = from === "CANCELED" ? canceled : await this.store.read("FAILED", id);
+    if (!source) return null;
+    const scheduledAtMs = options.scheduledAt !== undefined ? resolveScheduledAt(options.scheduledAt) : source.scheduledAtMs;
     const replayed: TaskRecord = {
-      ...canceled,
+      ...source,
       status: "pending",
       scheduledAt: new Date(scheduledAtMs).toISOString(),
       scheduledAtMs,
@@ -163,8 +176,8 @@ export class DelayedTaskService {
       result: null,
       attempts: 0,
     };
-    await this.store.move("CANCELED", "PENDING", replayed);
-    this.logger.info("[delayed-tasks] replayed", { id, scheduledAt: replayed.scheduledAt });
+    await this.store.move(from, "PENDING", replayed);
+    this.logger.info("[delayed-tasks] replayed", { id, from, scheduledAt: replayed.scheduledAt });
     return replayed;
   }
 
@@ -174,7 +187,7 @@ export class DelayedTaskService {
     this.started = true;
     this.logger.info("[delayed-tasks] scheduler started", {
       namespace: this.namespace,
-      maxTasks: this.maxTasks,
+      maxWeight: this.maxWeight,
       pollIntervalMs: this.pollIntervalMs,
     });
   }
@@ -185,17 +198,4 @@ export class DelayedTaskService {
     this.started = false;
     this.logger.info("[delayed-tasks] scheduler stopped");
   }
-}
-
-function resolveScheduledAt(value: Date | number | undefined) {
-  if (value === undefined) return Date.now();
-  if (value instanceof Date) {
-    const ms = value.getTime();
-    if (Number.isNaN(ms)) throw new Error("scheduledAt: invalid Date");
-    return ms;
-  }
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error("scheduledAt: must be a Date or a finite timestamp (ms)");
-  }
-  return value;
 }

@@ -1,6 +1,6 @@
 import { defineTask } from "@naskot/node-dispatched-tasks";
 
-// Demonstrates the weight cap: with maxTasks=5 and weight=3, only one HEAVY runs at a time.
+// Demonstrates the weight cap: with maxWeight=5 and weight=3, only one HEAVY runs at a time.
 export default defineTask({
   name: "HEAVY",
   weight: 3,

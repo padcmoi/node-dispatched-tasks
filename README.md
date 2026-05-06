@@ -5,13 +5,14 @@
 
 ## What it does
 
-Persist a task in Redis with a name (matching a registered handler), a `data` payload, a `scheduledAt` (Date or timestamp), and a `weight`. The library polls Redis once per second (configurable), picks every pending task whose `scheduledAt` is in the past, and executes the registered handler — provided the running weight stays under a configurable cap (`maxTasks`, default 5).
+Persist a task in Redis with a name (matching a registered handler), a `data` payload, a `scheduledAt` (Date or timestamp), and a `weight`. The library polls Redis once per second (configurable), picks every pending task whose `scheduledAt` is in the past, and executes the registered handler — provided the running weight stays under a configurable cap (`maxWeight`, default 5).
 
-Tasks transition between three Redis buckets:
+Tasks transition between four Redis buckets:
 
 ```
 <NS>:PENDING:task-<id>     ← created or replayed
-<NS>:FINISH:task-<id>      ← succeeded or definitively failed
+<NS>:FINISH:task-<id>      ← succeeded
+<NS>:FAILED:task-<id>      ← handler threw, timed out, or no handler registered
 <NS>:CANCELED:task-<id>    ← cancelled (can be replayed)
 ```
 
@@ -28,7 +29,7 @@ Required:
 
 Optional:
 
-- `maxTasks` — cap on the sum of running task weights (default `5`).
+- `maxWeight` — cap on the sum of running task weights (default `5`).
 - `pollIntervalMs` — scheduler tick interval (default `1000`).
 - `logger` — `Logger` (`info`, `warn`, `error`, optional `debug`).
 
@@ -70,11 +71,13 @@ class DelayedTaskService {
   enqueue(input: EnqueueInput): Promise<TaskRecord>;
   cancel(id: number): Promise<TaskRecord | null>;
   replay(id: number, options?: ReplayOptions): Promise<TaskRecord | null>;
+  setWeight(id: number, weight: number): Promise<TaskRecord | null>;
   get(id: number): Promise<TaskRecord | null>;
 
   list: {
     pending(): Promise<TaskRecord[]>;
     finished(): Promise<TaskRecord[]>;
+    failed(): Promise<TaskRecord[]>;
     canceled(): Promise<TaskRecord[]>;
   };
 
@@ -101,38 +104,62 @@ function defineTask<P, R>(input: TaskDefinition<P, R>): TaskDefinition<P, R>;
 ```
 {
   name: "HELLO_WORLD",
-  data?: any,                  // arbitrary serializable payload
-  scheduledAt?: Date | number, // Date or ms epoch; defaults to now
-  weight?: 2,                  // overrides definition weight
+  data?: any,                            // arbitrary serializable payload
+  scheduledAt?: Date | number | string,  // see below
+  weight?: 2,                            // overrides definition weight
 }
 ```
+
+`scheduledAt` accepts:
+
+- `Date` — absolute date.
+- `number` — number of **seconds from now** (e.g. `10` → 10 seconds from now).
+- `string` — either an ISO date (`"2026-12-31T23:59:00Z"`) or numeric seconds-from-now (`"10"`).
+- omitted/`undefined` — run immediately.
 
 ### Replay
 
 ```
-service.replay(id);                              // re-run as soon as possible
-service.replay(id, { scheduledAt: futureDate }); // re-run later
+service.replay(id);                                  // keep original scheduledAt
+service.replay(id, { scheduledAt: 30 });             // re-run 30 seconds from now
+service.replay(id, { scheduledAt: futureDate });     // re-run at a specific Date
+service.replay(id, { scheduledAt: "2026-12-31T..." });
 ```
 
-If `scheduledAt` is omitted, the original `scheduledAt` is preserved (the scheduler may pick the task up immediately if that timestamp is in the past).
+`scheduledAt` accepts the same shapes as `enqueue`. If omitted, the original `scheduledAt` is preserved — the scheduler may pick the task up immediately if that timestamp is already in the past.
 
 ## Lifecycle expectations
 
 - **Cancel**: only valid for a pending task that has not yet started (`status === "pending"`). Returns `null` if the task is `running`, `finished`, `failed`, or already `canceled`.
-- **Replay**: only valid for a task in the `CANCELED` bucket.
-- **Failures**: a task whose handler throws (or whose `timeoutMs` elapses) is moved to `FINISH` with `status = "failed"` and a populated `error`.
-- **Missing handler**: a pending task whose `name` is no longer registered is moved to `FINISH` with `status = "failed"`.
+- **Replay**: valid for a task in the `CANCELED` or `FAILED` bucket. The lib auto-detects which bucket the id lives in.
+- **Failures**: a task whose handler throws (or whose `timeoutMs` elapses) is moved to `FAILED` with `status = "failed"` and a populated `error`.
+- **Missing handler**: a pending task whose `name` is no longer registered is moved to `FAILED` with `status = "failed"`.
 
 ## Weight semantics
 
-Each task has a `weight`. The scheduler maintains a running sum of weights of in-flight tasks and only starts the next pending task if the sum after start would not exceed `maxTasks`.
+Each task has a `weight`. The scheduler maintains a running sum of weights of in-flight tasks and only starts the next pending task if the sum after start would not exceed `maxWeight`.
 
-Examples with `maxTasks = 5`:
+Examples with `maxWeight = 5`:
 
 - task A (weight 3) and task B (weight 3) → only one runs at a time.
 - task A (weight 3) and task B (weight 2) → both run concurrently.
 
 Weights must be positive numbers.
+
+### Clamping at enqueue
+
+If `enqueue` is called with a `weight` that exceeds the current `maxWeight`, the value is **clamped** to `maxWeight` so the task can never be larger than the cap. The clamp uses the live `maxWeight` of the running service.
+
+> Caveat: existing pending tasks are **not** rewritten when `maxWeight` changes between restarts. A task created with `weight: 8` while `maxWeight` was `10` keeps its `weight: 8` after a restart with `maxWeight: 5`, and the scheduler will refuse to ever start it (8 > 5). Use `setWeight(id, weight)` to bring it back below the cap, or `cancel` it.
+
+### `setWeight(id, weight)`
+
+Update the weight of a task that is still in the `PENDING` bucket and not yet running. The new value is also clamped to `maxWeight`. Returns `null` for unknown ids or tasks already in `running`/`finished`/`failed`/`canceled` state.
+
+```ts
+await service.setWeight(42, 4); // pending #42 now has weight 4
+await service.setWeight(42, 99); // clamped to maxWeight (e.g. 5)
+```
 
 ## Notes
 

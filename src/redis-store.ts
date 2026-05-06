@@ -1,7 +1,7 @@
 import type { Redis } from "ioredis";
 import type { TaskRecord } from "./types.js";
 
-export type Bucket = "PENDING" | "FINISH" | "CANCELED";
+export type Bucket = "PENDING" | "FINISH" | "FAILED" | "CANCELED";
 
 export class RedisStore {
   constructor(

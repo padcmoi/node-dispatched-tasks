@@ -1,6 +1,6 @@
 import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
-import { Body, Controller, Module, NotFoundException, OnApplicationShutdown, Param, Post } from "@nestjs/common";
+import { Body, Controller, Module, NotFoundException, OnApplicationShutdown, Param, Post, Query } from "@nestjs/common";
 import { Redis } from "ioredis";
 import { DelayedTaskService, defineTask } from "@naskot/node-dispatched-tasks";
 
@@ -14,7 +14,7 @@ const redis = new Redis({
 const lib = new DelayedTaskService({
   redis,
   namespace: process.env.DT_NAMESPACE ?? "delayed-tasks",
-  maxTasks: 5,
+  maxWeight: 5,
   pollIntervalMs: 1000,
   logger: console,
 });
@@ -30,14 +30,16 @@ class DispatchController implements OnApplicationShutdown {
   @Post(":name")
   async dispatch(
     @Param("name") name: string,
-    @Body() body: { data?: unknown; scheduledAt?: string; weight?: number }
+    @Query("scheduledAt") qScheduledAt: string | undefined,
+    @Query("weight") qWeight: string | undefined,
+    @Body() body: { data?: unknown; scheduledAt?: string | number; weight?: number }
   ) {
     if (!lib.has(name)) throw new NotFoundException(`unknown task '${name}'`);
     return lib.enqueue({
       name,
       data: body?.data,
-      scheduledAt: resolveScheduledAt(body?.scheduledAt),
-      weight: body?.weight,
+      scheduledAt: qScheduledAt ?? body?.scheduledAt,
+      weight: qWeight !== undefined ? Number(qWeight) : body?.weight,
     });
   }
 
@@ -49,18 +51,6 @@ class DispatchController implements OnApplicationShutdown {
 
 @Module({ controllers: [DispatchController] })
 class AppModule {}
-
-function resolveScheduledAt(value: string | undefined) {
-  if (!value) return undefined;
-  const match = /^\+(\d+)([smh])$/.exec(value);
-  if (match) {
-    const offset = Number(match[1]);
-    const unit = match[2];
-    const ms = unit === "s" ? offset * 1000 : unit === "m" ? offset * 60_000 : offset * 3_600_000;
-    return new Date(Date.now() + ms);
-  }
-  return new Date(value);
-}
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);

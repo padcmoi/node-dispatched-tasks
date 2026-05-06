@@ -5,7 +5,7 @@ import type { Logger, RunContext, TaskRecord } from "./types.js";
 export interface SchedulerOptions {
   store: RedisStore;
   registry: TaskRegistry;
-  maxTasks: number;
+  maxWeight: number;
   pollIntervalMs: number;
   logger: Logger;
 }
@@ -51,7 +51,7 @@ export class Scheduler {
         if (task.status === "running") continue;
         if (this.inflight.has(task.id)) continue;
         if (task.scheduledAtMs > now) continue;
-        if (this.currentWeight + task.weight > this.opts.maxTasks) continue;
+        if (this.currentWeight + task.weight > this.opts.maxWeight) continue;
         this.run(task);
       }
     } catch (err) {
@@ -80,8 +80,10 @@ export class Scheduler {
         error: `No handler registered for task name "${task.name}"`,
       };
       void this.opts.store
-        .move("PENDING", "FINISH", final)
-        .catch((err: unknown) => this.opts.logger.error("[delayed-tasks] move failed", { id: task.id, error: errorToString(err) }))
+        .move("PENDING", "FAILED", final)
+        .catch((err: unknown) =>
+          this.opts.logger.error("[delayed-tasks] move failed", { id: task.id, error: errorToString(err) })
+        )
         .finally(release);
       return;
     }
@@ -124,7 +126,7 @@ export class Scheduler {
           error: timedOut ? `Task timed out after ${String(definition.timeoutMs)}ms` : errorToString(err),
         };
         try {
-          await this.opts.store.move("PENDING", "FINISH", final);
+          await this.opts.store.move("PENDING", "FAILED", final);
         } catch (moveErr) {
           this.opts.logger.error("[delayed-tasks] move failed", { id: task.id, error: errorToString(moveErr) });
         }

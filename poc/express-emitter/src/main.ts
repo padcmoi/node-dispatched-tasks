@@ -12,7 +12,7 @@ const redis = new Redis({
 const lib = new DelayedTaskService({
   redis,
   namespace: process.env.DT_NAMESPACE ?? "delayed-tasks",
-  maxTasks: 5,
+  maxWeight: 5,
   pollIntervalMs: 1000,
   logger: console,
 });
@@ -24,30 +24,24 @@ lib.register(defineTask({ name: "HEAVY", weight: 3, run: noop }));
 const app = express();
 app.use(express.json());
 
-app.post("/dispatch/:name", async (req, res) => {
-  const name = req.params.name;
-  if (!lib.has(name)) return res.status(404).json({ error: `unknown task '${name}'` });
-  const body = (req.body ?? {}) as { data?: unknown; scheduledAt?: string; weight?: number };
-  const record = await lib.enqueue({
-    name,
-    data: body.data,
-    scheduledAt: resolveScheduledAt(body.scheduledAt),
-    weight: body.weight,
-  });
-  res.status(202).json(record);
-});
-
-function resolveScheduledAt(value: string | undefined): Date | undefined {
-  if (!value) return undefined;
-  const match = /^\+(\d+)([smh])$/.exec(value);
-  if (match) {
-    const offset = Number(match[1]);
-    const unit = match[2];
-    const ms = unit === "s" ? offset * 1000 : unit === "m" ? offset * 60_000 : offset * 3_600_000;
-    return new Date(Date.now() + ms);
+app.post("/dispatch/:name", async (req, res, next) => {
+  try {
+    const name = req.params.name;
+    if (!lib.has(name)) return res.status(404).json({ error: `unknown task '${name}'` });
+    const body = (req.body ?? {}) as { data?: unknown; scheduledAt?: string | number; weight?: number };
+    const qScheduledAt = typeof req.query.scheduledAt === "string" ? req.query.scheduledAt : undefined;
+    const qWeight = typeof req.query.weight === "string" ? Number(req.query.weight) : undefined;
+    const record = await lib.enqueue({
+      name,
+      data: body.data,
+      scheduledAt: qScheduledAt ?? body.scheduledAt,
+      weight: qWeight ?? body.weight,
+    });
+    res.status(202).json(record);
+  } catch (err) {
+    next(err);
   }
-  return new Date(value);
-}
+});
 
 const port = Number(process.env.PORT ?? 4003);
 const server = app.listen(port, () => {

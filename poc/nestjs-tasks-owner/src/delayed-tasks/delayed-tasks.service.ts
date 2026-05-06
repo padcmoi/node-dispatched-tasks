@@ -19,7 +19,7 @@ export class DelayedTaskService implements OnApplicationBootstrap, OnApplication
     this.lib = new LibService({
       redis,
       namespace: process.env.DT_NAMESPACE ?? "delayed-tasks",
-      maxTasks: Number(process.env.DT_MAX_TASKS ?? 5),
+      maxWeight: Number(process.env.DT_MAX_WEIGHT ?? 5),
       pollIntervalMs: Number(process.env.DT_POLL_INTERVAL_MS ?? 1000),
       logger: console,
     });
@@ -29,9 +29,7 @@ export class DelayedTaskService implements OnApplicationBootstrap, OnApplication
     this.register(helloWorld);
     this.register(heavy);
 
-    const isMaster =
-      process.env.NODE_APP_INSTANCE === undefined ||
-      process.env.NODE_APP_INSTANCE === "0";
+    const isMaster = process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === "0";
     const wantsScheduler = process.env.OWNER_RUN_SCHEDULER !== "false";
     if (isMaster && wantsScheduler) {
       this.lib.start();
@@ -60,12 +58,16 @@ export class DelayedTaskService implements OnApplicationBootstrap, OnApplication
   replay(id: number, options?: ReplayOptions) {
     return this.lib.replay(id, options);
   }
+  setWeight(id: number, weight: number) {
+    return this.lib.setWeight(id, weight);
+  }
   get(id: number) {
     return this.lib.get(id);
   }
   list = {
     pending: () => this.lib.list.pending(),
     finished: () => this.lib.list.finished(),
+    failed: () => this.lib.list.failed(),
     canceled: () => this.lib.list.canceled(),
   };
 }

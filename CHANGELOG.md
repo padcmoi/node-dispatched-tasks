@@ -3,12 +3,16 @@
 ## [Unreleased] - yyyy-mm-dd
 
 - Pure-Redis storage. No MariaDB, no TypeORM, no entity, no migrations.
-- Three buckets per namespace: `<NS>:PENDING:task-<id>`, `<NS>:FINISH:task-<id>`, `<NS>:CANCELED:task-<id>`.
+- Four buckets per namespace: `<NS>:PENDING:task-<id>`, `<NS>:FINISH:task-<id>` (success), `<NS>:FAILED:task-<id>` (handler error / timeout / no handler), `<NS>:CANCELED:task-<id>` (replayable).
 - Auto-increment integer IDs via `INCR <NS>:counter`.
 - Polling scheduler (default 1000ms), processes pending tasks in ID order when `scheduledAt <= now`.
-- Weight-aware execution capped by `maxTasks` (default 5): a task starts only if `Σ(running.weight) + task.weight <= maxTasks`.
-- Service API: `enqueue`, `cancel`, `replay`, `get`, `has`, `list.pending`, `list.finished`, `list.canceled`, `start`, `stop`.
-- Cancelled tasks can be replayed; replay accepts an optional future `scheduledAt` (otherwise keeps the original).
+- Weight-aware execution capped by `maxWeight` (default 5): a task starts only if `Σ(running.weight) + task.weight <= maxWeight`.
+- Service API: `enqueue`, `cancel`, `replay`, `setWeight`, `get`, `has`, `list.pending`, `list.finished`, `list.failed`, `list.canceled`, `start`, `stop`.
+- `enqueue` clamps `weight` to the live `maxWeight`. `setWeight(id, weight)` updates a still-pending task's weight (also clamped) — useful when `maxWeight` was lowered between deploys.
+- Cancelled or failed tasks can be replayed; `replay(id)` auto-detects the source bucket (`CANCELED` or `FAILED`) and accepts an optional future `scheduledAt` (otherwise keeps the original).
+- `scheduledAt` accepts `Date`, `number` (seconds from now), or `string` (ISO date or numeric seconds-from-now).
+- `resolveScheduledAt` exported as a public utility.
+- POC emitters accept `scheduledAt` and `weight` via query string.
 - Removed: `TypeOrmTaskStore`, `RedisPriorityIndex`, `DispatchedTask` entity, `configureDispatchedTask`, `tableName`, `taskStoreFactory`, `idempotencyKey`, `correlationId`, `source`, `callback`, ULID generator, retry/backoff, Zod `inputSchema` validation.
 - Removed peer dependencies: `typeorm`, `zod`. Only `ioredis` remains.
 

@@ -65,9 +65,11 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/ioredis-mock": "^8.2.7",
     "@types/node": "^24.6.0",
     "eslint": "^10.2.1",
     "ioredis": "^5.4.1",
+    "ioredis-mock": "^8.13.1",
     "prettier": "^3.8.3",
     "tsup": "^8.5.0",
     "typescript": "^5.9.3",

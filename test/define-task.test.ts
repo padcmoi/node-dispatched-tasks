@@ -19,8 +19,6 @@ describe("defineTask", () => {
   });
 
   it("rejects a non-function run", () => {
-    expect(() =>
-      defineTask({ name: "HELLO", run: undefined as unknown as () => void })
-    ).toThrow();
+    expect(() => defineTask({ name: "HELLO", run: undefined as unknown as () => void })).toThrow();
   });
 });

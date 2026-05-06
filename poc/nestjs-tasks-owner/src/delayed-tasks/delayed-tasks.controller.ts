@@ -7,10 +7,7 @@ export class DelayedTaskController {
 
   @Post()
   @HttpCode(202)
-  async enqueue(
-    @Query("name") name: string,
-    @Body() body: { data?: unknown; scheduledAt?: string; weight?: number }
-  ) {
+  async enqueue(@Query("name") name: string, @Body() body: { data?: unknown; scheduledAt?: string; weight?: number }) {
     if (!name || typeof name !== "string") throw new NotFoundException("query 'name' required");
     if (!this.tasks.has(name)) throw new NotFoundException(`unknown task '${name}'`);
     return this.tasks.enqueue({
@@ -23,12 +20,13 @@ export class DelayedTaskController {
 
   @Get()
   async list() {
-    const [pending, finished, canceled] = await Promise.all([
+    const [pending, finished, failed, canceled] = await Promise.all([
       this.tasks.list.pending(),
       this.tasks.list.finished(),
+      this.tasks.list.failed(),
       this.tasks.list.canceled(),
     ]);
-    return { pending, finished, canceled };
+    return { pending, finished, failed, canceled };
   }
 
   @Get(":id")
@@ -50,6 +48,13 @@ export class DelayedTaskController {
     const r = await this.tasks.replay(Number(id), {
       scheduledAt: body?.scheduledAt ? new Date(body.scheduledAt) : undefined,
     });
+    if (!r) throw new NotFoundException();
+    return r;
+  }
+
+  @Post(":id/weight")
+  async setWeight(@Param("id") id: string, @Body() body: { weight: number }) {
+    const r = await this.tasks.setWeight(Number(id), Number(body?.weight));
     if (!r) throw new NotFoundException();
     return r;
   }

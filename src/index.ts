@@ -1,6 +1,7 @@
 export { DelayedTaskService } from "./delayed-task.service.js";
 export type { DelayedTaskServiceOptions } from "./delayed-task.service.js";
 export { defineTask } from "./define-task.js";
+export { resolveScheduledAt } from "./schedule.js";
 export {
   DelayedTaskError,
   HandlerNotFoundError,
@@ -13,6 +14,7 @@ export type {
   Logger,
   ReplayOptions,
   RunContext,
+  ScheduledAtInput,
   TaskDefinition,
   TaskRecord,
   TaskStatus,

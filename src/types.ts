@@ -17,15 +17,24 @@ export interface TaskRecord {
   error: string | null;
 }
 
+/**
+ * Accepts:
+ *   - `Date`         → absolute date.
+ *   - `number`       → number of seconds from now.
+ *   - `string`       → ISO date (e.g. `"2026-12-31T23:59:00Z"`) OR numeric seconds-from-now (e.g. `"10"`).
+ *   - `undefined`    → run immediately (now).
+ */
+export type ScheduledAtInput = Date | number | string;
+
 export interface EnqueueInput {
   name: string;
   data?: unknown;
-  scheduledAt?: Date | number;
+  scheduledAt?: ScheduledAtInput;
   weight?: number;
 }
 
 export interface ReplayOptions {
-  scheduledAt?: Date | number;
+  scheduledAt?: ScheduledAtInput;
 }
 
 export interface RunContext {
