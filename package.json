@@ -1,7 +1,7 @@
 {
   "name": "@naskot/node-dispatched-tasks",
-  "version": "0.1.1",
-  "description": "Persisted, weight-aware async task dispatcher for Node microservices (MariaDB + Redis hybrid, agnostic Express/NestJS).",
+  "version": "1.0.0",
+  "description": "Lightweight Redis-backed delayed-task scheduler for Node microservices: weight-aware execution, integer auto-increment IDs, framework-agnostic.",
   "license": "MIT",
   "type": "module",
   "private": false,
@@ -53,31 +53,27 @@
     "node",
     "typescript",
     "task-queue",
-    "dispatcher",
-    "microservices",
-    "mariadb",
+    "delayed-tasks",
+    "scheduler",
     "redis",
-    "typeorm",
-    "express",
-    "nestjs"
+    "ioredis",
+    "weight",
+    "microservices"
   ],
   "peerDependencies": {
-    "ioredis": "^5.0.0",
-    "typeorm": "^0.3.0",
-    "zod": "^3.0.0 || ^4.0.0"
+    "ioredis": "^5.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/ioredis-mock": "^8.2.7",
     "@types/node": "^24.6.0",
     "eslint": "^10.2.1",
     "ioredis": "^5.4.1",
+    "ioredis-mock": "^8.13.1",
     "prettier": "^3.8.3",
-    "reflect-metadata": "^0.2.2",
     "tsup": "^8.5.0",
-    "typeorm": "^0.3.20",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.58.2",
-    "vitest": "^3.2.4",
-    "zod": "^3.23.8"
+    "vitest": "^3.2.4"
   }
 }

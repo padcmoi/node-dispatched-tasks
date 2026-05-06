@@ -3,15 +3,14 @@
     "target": "ES2022",
     "module": "Node16",
     "moduleResolution": "Node16",
+    "outDir": "dist",
+    "rootDir": "./src",
+    "strict": true,
+    "skipLibCheck": true,
     "esModuleInterop": true,
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "strict": false,
-    "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "outDir": "dist",
-    "rootDir": "./src"
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["**/specs/**", "**/*.spec.ts"]
+  "include": ["src/**/*.ts"]
 }

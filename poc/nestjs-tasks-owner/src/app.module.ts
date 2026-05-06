@@ -1,7 +1,7 @@
 import { Module } from "@nestjs/common";
-import { DispatchedTasksModule } from "./dispatched-tasks/dispatched-tasks.module";
+import { DelayedTasksModule } from "./delayed-tasks/delayed-tasks.module.js";
 
 @Module({
-  imports: [DispatchedTasksModule],
+  imports: [DelayedTasksModule],
 })
 export class AppModule {}

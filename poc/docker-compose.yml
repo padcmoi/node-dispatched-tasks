@@ -1,99 +1,62 @@
-name: dispatched-tasks-poc
+name: node-dispatched-tasks-poc
 
 services:
-  mariadb:
-    image: mariadb:11
-    environment:
-      MARIADB_ROOT_PASSWORD: root
-      MARIADB_DATABASE: dispatched_tasks_poc
-      MARIADB_USER: app
-      MARIADB_PASSWORD: app
-    volumes:
-      - mariadb-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
-  phpmyadmin:
-    image: phpmyadmin:latest
-    environment:
-      PMA_HOST: mariadb
-      PMA_USER: root
-      PMA_PASSWORD: root
-      UPLOAD_LIMIT: 64M
-    ports:
-      - "8080:80"
-    depends_on:
-      mariadb:
-        condition: service_healthy
-
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
-    volumes:
-      - redis-data:/data
     ports:
-      - "6079:6379"
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
+      interval: 2s
+      timeout: 2s
       retries: 10
+
+  redisinsight:
+    image: redis/redisinsight:latest
+    ports:
+      - "6079:5540"
+    depends_on:
+      redis:
+        condition: service_healthy
 
   nestjs-tasks-owner:
     build:
       context: ..
       dockerfile: poc/nestjs-tasks-owner/Dockerfile
+    env_file:
+      - .env
     environment:
-      PORT: "3000"
-      DT_REDIS_HOST: redis
-      DT_REDIS_PORT: "6379"
-      DT_REDIS_NAMESPACE: dispatched-tasks-poc
-      DT_DB_HOST: mariadb
-      DT_DB_PORT: "3306"
-      DT_DB_NAME: dispatched_tasks_poc
-      DT_DB_USER: app
-      DT_DB_PASSWORD: app
-      # Demonstrates the optional table-name override.
-      # Reads from .env (or shell) — falls back to "dispatched-task123" so the demo always shows a non-default name.
-      # Unset to fall back to the lib default "dispatched_task".
-      DT_TABLE_NAME: "${DT_TABLE_NAME:-dispatched-task123}"
+      PORT: 4001
+      OWNER_RUN_SCHEDULER: "true"
+      NODE_APP_INSTANCE: "0"
     ports:
-      - "3000:3000"
+      - "4001:4001"
     depends_on:
-      mariadb:
-        condition: service_healthy
       redis:
         condition: service_healthy
-
-  express-emitter:
-    build:
-      context: ..
-      dockerfile: poc/express-emitter/Dockerfile
-    environment:
-      PORT: "3000"
-      OWNER_URL: http://nestjs-tasks-owner:3000
-    ports:
-      - "3001:3000"
-    depends_on:
-      nestjs-tasks-owner:
-        condition: service_started
 
   nestjs-emitter:
     build:
       context: ..
       dockerfile: poc/nestjs-emitter/Dockerfile
+    env_file:
+      - .env
     environment:
-      PORT: "3000"
-      OWNER_URL: http://nestjs-tasks-owner:3000
+      PORT: 4002
     ports:
-      - "3002:3000"
+      - "4002:4002"
     depends_on:
-      nestjs-tasks-owner:
-        condition: service_started
+      - nestjs-tasks-owner
 
-volumes:
-  mariadb-data:
-  redis-data:
+  express-emitter:
+    build:
+      context: ..
+      dockerfile: poc/express-emitter/Dockerfile
+    env_file:
+      - .env
+    environment:
+      PORT: 4003
+    ports:
+      - "4003:4003"
+    depends_on:
+      - nestjs-tasks-owner
