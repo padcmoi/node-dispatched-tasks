@@ -33,6 +33,9 @@ export const delayedTaskService = new DelayedTaskService({
   namespace: process.env.DT_NAMESPACE ?? "delayed-tasks",
   maxWeight: Number(process.env.DT_MAX_WEIGHT ?? 5),
   pollIntervalMs: Number(process.env.DT_POLL_INTERVAL_MS ?? 1000),
+  // Optional: auto-purge successful tasks older than N days (FINISH bucket only).
+  // Leave undefined or set 0 to disable.
+  finishedTtlDays: process.env.DT_FINISHED_TTL_DAYS ? Number(process.env.DT_FINISHED_TTL_DAYS) : undefined,
   logger: console,
 });
 
@@ -204,7 +207,8 @@ Start/stop the polling scheduler. Call `start()` only on the master process. Alw
 
 ## 4) Production notes
 
-- **Required envs (resolved in the service layer)**: `DT_REDIS_HOST`, `DT_REDIS_PORT`, optional `DT_REDIS_PASSWORD`, `DT_NAMESPACE`, `DT_MAX_WEIGHT`, `DT_POLL_INTERVAL_MS`.
+- **Required envs (resolved in the service layer)**: `DT_REDIS_HOST`, `DT_REDIS_PORT`, optional `DT_REDIS_PASSWORD`, `DT_NAMESPACE`, `DT_MAX_WEIGHT`, `DT_POLL_INTERVAL_MS`, optional `DT_FINISHED_TTL_DAYS`.
+- **FINISH retention**: set `DT_FINISHED_TTL_DAYS` to a positive integer to apply a Redis TTL on every successful task record (FINISH bucket only). Leave unset/`0` to keep records indefinitely.
 - **Single scheduler**: only the master process should call `start()`. Other workers can still `enqueue`/`cancel`/`replay`/`list` — they simply skip `start()`.
 - **Backpressure**: tune `DT_MAX_WEIGHT` to match downstream capacity (HTTP API limits, DB pool, etc.).
 - **Crash recovery**: a process crash mid-execution leaves a task in `<NS>:PENDING:task-<id>` with `status = "running"`. The scheduler does not re-pick it on restart; expose an admin route to surface and `replay` it.

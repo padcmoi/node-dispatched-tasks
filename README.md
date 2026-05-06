@@ -31,6 +31,7 @@ Optional:
 
 - `maxWeight` — cap on the sum of running task weights (default `5`).
 - `pollIntervalMs` — scheduler tick interval (default `1000`).
+- `finishedTtlDays` — retention (in **days**) for the `FINISH` bucket. When set to a positive number, every successful task gets a Redis TTL of `finishedTtlDays × 86400` seconds — older successful records are auto-purged by Redis. Defaults to disabled (FINISH records kept indefinitely). **Only** the FINISH bucket is affected; PENDING / FAILED / CANCELED never get a TTL.
 - `logger` — `Logger` (`info`, `warn`, `error`, optional `debug`).
 
 ## Single-master rule

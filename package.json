@@ -1,6 +1,6 @@
 {
   "name": "@naskot/node-dispatched-tasks",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Lightweight Redis-backed delayed-task scheduler for Node microservices: weight-aware execution, integer auto-increment IDs, framework-agnostic.",
   "license": "MIT",
   "type": "module",
