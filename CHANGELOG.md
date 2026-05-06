@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## [1.0.1] - 2026-05-06
+
+- Added optional `finishedTtlDays` option on `DelayedTaskServiceOptions`. When set to a positive number, every record written to the FINISH bucket gets a Redis `EX` TTL of `finishedTtlDays × 86400` seconds — successful tasks are auto-purged by Redis past that window. Disabled by default; never applies to PENDING / FAILED / CANCELED.
+
 ## [1.0.0] - 2026-05-06
 
 - Pure-Redis storage. No MariaDB, no TypeORM, no entity, no migrations.
